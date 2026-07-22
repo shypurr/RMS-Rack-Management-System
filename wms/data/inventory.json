@@ -1,0 +1,26 @@
+{
+  "warehouses": [
+    {"id":"WH-01","name":"Main Warehouse","city":"Ahmedabad","capacity":1000,"occupied":742},
+    {"id":"WH-02","name":"North Hub","city":"Surat","capacity":500,"occupied":310},
+    {"id":"WH-03","name":"South Hub","city":"Vadodara","capacity":400,"occupied":180},
+    {"id":"WH-04","name":"East Depot","city":"Rajkot","capacity":300,"occupied":220},
+    {"id":"WH-05","name":"West Store","city":"Bhavnagar","capacity":250,"occupied":90}
+  ],
+  "categories": [
+    "Salwar Kameez","Saree","Lehenga","Kurti","Dupatta",
+    "Shirt","Trousers","Jacket","T-Shirt","Denim",
+    "Kids Wear","Ethnic Wear","Western Wear","Sportswear","Accessories"
+  ],
+  "suppliers": [
+    {"id":"SUP-001","name":"Florina Textiles","city":"Surat","contact":"9876543210"},
+    {"id":"SUP-002","name":"Vastra Exports","city":"Ahmedabad","contact":"9876543211"},
+    {"id":"SUP-003","name":"Charmeuse Fabrics","city":"Mumbai","contact":"9876543212"},
+    {"id":"SUP-004","name":"Royal Weavers","city":"Jaipur","contact":"9876543213"},
+    {"id":"SUP-005","name":"Silk Route Co","city":"Varanasi","contact":"9876543214"},
+    {"id":"SUP-006","name":"Cotton King","city":"Coimbatore","contact":"9876543215"},
+    {"id":"SUP-007","name":"Linen House","city":"Kolkata","contact":"9876543216"},
+    {"id":"SUP-008","name":"Style India","city":"Delhi","contact":"9876543217"},
+    {"id":"SUP-009","name":"Trendy Threads","city":"Pune","contact":"9876543218"},
+    {"id":"SUP-010","name":"Fashion Hub","city":"Bengaluru","contact":"9876543219"}
+  ]
+}

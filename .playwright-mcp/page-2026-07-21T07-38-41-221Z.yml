@@ -1,0 +1,78 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 
+      - generic [ref=e8]: VastraWMS
+    - navigation [ref=e9]:
+      - generic [ref=e10]: Rack Module
+      - link " Rack Management" [ref=e11] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e12]: 
+        - generic [ref=e13]: Rack Management
+      - link " Add Item" [ref=e14] [cursor=pointer]:
+        - /url: /add
+        - generic [ref=e15]: 
+        - generic [ref=e16]: Add Item
+      - link " Move Item" [ref=e17] [cursor=pointer]:
+        - /url: /move
+        - generic [ref=e18]: 
+        - generic [ref=e19]: Move Item
+      - link " Rack Report" [ref=e20] [cursor=pointer]:
+        - /url: /report
+        - generic [ref=e21]: 
+        - generic [ref=e22]: Rack Report
+      - link " Audit Log" [ref=e23] [cursor=pointer]:
+        - /url: /audit
+        - generic [ref=e24]: 
+        - generic [ref=e25]: Audit Log
+    - generic [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: RK
+      - generic [ref=e29]:
+        - generic [ref=e30]: Raj Kumar
+        - generic [ref=e31]: Warehouse Manager
+  - generic [ref=e32]:
+    - banner [ref=e33]:
+      - generic [ref=e34] [cursor=pointer]: 
+      - generic [ref=e36] [cursor=pointer]:
+        - generic [ref=e37]: 
+        - generic [ref=e38]: Main Warehouse
+        - generic [ref=e39]: 
+      - generic [ref=e40]:
+        - generic "Full Screen" [ref=e41] [cursor=pointer]: 
+        - generic "Toggle Dark Mode" [ref=e43] [cursor=pointer]
+        - generic [ref=e44] [cursor=pointer]:
+          - generic [ref=e45]: RK
+          - generic [ref=e46]:
+            - generic [ref=e47]: Raj Kumar
+            - generic [ref=e48]: Admin
+    - main [ref=e49]:
+      - generic [ref=e50]: Rack Management
+      - generic [ref=e53]:
+        - heading "Rack Management" [level=1] [ref=e54]
+        - paragraph [ref=e55]: Live occupancy across all rack bins
+      - generic [ref=e58]:
+        - generic [ref=e59]: Vacant
+        - generic [ref=e62]: Low (1–49%)
+        - generic [ref=e65]: Partial (50–84%)
+        - generic [ref=e68]: Full (≥85%)
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - strong [ref=e73]: "0"
+            - text: Vacant
+          - generic [ref=e74]:
+            - strong [ref=e75]: "0"
+            - text: Occupied
+          - generic [ref=e76]:
+            - strong [ref=e77]: "0"
+            - text: Total
+      - generic [ref=e80]:
+        - generic [ref=e81]:
+          - generic: 
+          - textbox "Search rack ID…" [ref=e82]
+        - combobox [ref=e83]:
+          - option "All Statuses" [selected]
+          - option "Vacant"
+          - option "Occupied"
+      - generic [ref=e86]:
+        - generic [ref=e87]: 
+        - text: Rack Bins

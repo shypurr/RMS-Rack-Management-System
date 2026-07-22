@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Inventory — VastraWMS</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+<div class="wms-shell" id="wmsShell">
+  <div class="main-content" id="mainContent">
+    <main class="page-content">
+      <div class="breadcrumb-bar"><a href="index.html">Dashboard</a> / <span>Inventory</span></div>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Inventory Management</h1>
+          <p class="page-subtitle">Manage and track all warehouse stock</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-ghost btn-sm" id="btnExportCSV"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.print()"><i class="fa-solid fa-print"></i> Print</button>
+          <a href="receive-item.html" class="btn btn-primary"><i class="fa-solid fa-plus"></i> Receive Item</a>
+        </div>
+      </div>
+
+      <!-- Filter Bar -->
+      <div class="card mb-4">
+        <div class="card-body" style="padding:14px 20px">
+          <div class="flex gap-3 flex-wrap items-center">
+            <div class="input-group" style="flex:1;min-width:200px">
+              <span class="input-icon"><i class="fa-solid fa-search"></i></span>
+              <input class="form-control" id="invSearch" placeholder="Search by name, SKU, barcode, color…">
+            </div>
+            <select class="form-control" id="filterCat"    style="width:auto">  <option value="">All Categories</option></select>
+            <select class="form-control" id="filterStatus" style="width:auto">
+              <option value="">All Status</option>
+              <option>Active</option><option>Low Stock</option><option>Out of Stock</option><option>Discontinued</option>
+            </select>
+            <select class="form-control" id="filterWh" style="width:auto"><option value="">All Warehouses</option></select>
+            <span class="text-muted text-sm ml-auto" id="totalCount">Loading…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Table -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title"><i class="fa-solid fa-boxes-stacked" style="color:var(--primary)"></i>&nbsp; Stock List</span>
+          <div class="flex gap-2 items-center">
+            <span class="text-sm text-muted" id="pageInfo"></span>
+          </div>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-sort="barcode">Barcode <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="sku">SKU <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th>Image</th>
+                <th data-sort="name">Item Name <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="category">Category <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="brand">Brand <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="color">Color <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="size">Size <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th data-sort="qty">Qty <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th>Reserved</th>
+                <th data-sort="available">Available <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th>Warehouse</th>
+                <th>Zone</th>
+                <th>Aisle</th>
+                <th>Rack</th>
+                <th>Shelf</th>
+                <th>Bin</th>
+                <th data-sort="status">Status <i class="sort-icon fa-solid fa-sort"></i></th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryTbody">
+              <tr><td colspan="19"><div class="skeleton" style="height:40px;margin:8px"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+          <span class="text-sm text-muted" id="pageInfo2"></span>
+          <div class="pagination" id="pagination"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-backdrop" id="editModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Edit Item</h2>
+      <div class="modal-close" data-modal-close><i class="fa-solid fa-xmark"></i></div>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editItemId">
+      <div class="form-group">
+        <label class="form-label">Item Name</label>
+        <input class="form-control" id="editItemName">
+      </div>
+      <div class="grid cols-2 gap-col-4">
+        <div class="form-group">
+          <label class="form-label">Quantity</label>
+          <input class="form-control" type="number" id="editItemQty" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select class="form-control" id="editItemStatus">
+            <option>Active</option><option>Low Stock</option><option>Out of Stock</option><option>Discontinued</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" data-modal-close>Cancel</button>
+      <button class="btn btn-primary" id="btnSaveEdit"><i class="fa-solid fa-check"></i> Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/app.js"></script>
+<script src="js/inventory.js"></script>
+</body>
+</html>

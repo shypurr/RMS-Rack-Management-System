@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Receive Item — VastraWMS</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+<div class="wms-shell" id="wmsShell">
+  <div class="main-content" id="mainContent">
+    <main class="page-content">
+      <div class="breadcrumb-bar"><a href="index.html">Dashboard</a> / <span>Receive Item</span></div>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Receive Items</h1>
+          <p class="page-subtitle">Scan or enter item details to add to inventory</p>
+        </div>
+      </div>
+
+      <div class="grid gap-col-6" style="grid-template-columns:1fr 360px">
+        <!-- Left: Form -->
+        <div>
+          <!-- Step 1: Barcode -->
+          <div class="card mb-4">
+            <div class="card-header">
+              <span class="card-title"><i class="fa-solid fa-barcode" style="color:var(--primary)"></i>&nbsp; Step 1 — Scan or Enter Barcode</span>
+              <span class="badge badge-primary">Step 1 of 3</span>
+            </div>
+            <div class="card-body">
+              <div class="scan-box mb-4">
+                <div class="scan-pulse"></div>
+                <i class="fa-solid fa-barcode" style="font-size:48px;color:var(--primary);margin-bottom:12px"></i>
+                <p style="color:var(--text-secondary);font-size:13px;margin-bottom:16px">Position barcode in front of scanner or type below</p>
+                <div class="input-group" style="max-width:360px;margin:0 auto">
+                  <span class="input-icon"><i class="fa-solid fa-barcode"></i></span>
+                  <input class="form-control" id="barcodeInput" placeholder="Scan or type barcode…" autofocus autocomplete="off">
+                  <div class="input-group-btn"><button class="btn btn-primary btn-sm" onclick="Receive.lookup()"><i class="fa-solid fa-magnifying-glass"></i> Find</button></div>
+                </div>
+              </div>
+              <!-- Item found / not found -->
+              <div id="barcodeResult" style="display:none"></div>
+            </div>
+          </div>
+
+          <!-- Step 2: Item Details Form -->
+          <div class="card mb-4" id="itemFormCard" style="display:none">
+            <div class="card-header">
+              <span class="card-title"><i class="fa-solid fa-box" style="color:var(--primary)"></i>&nbsp; Step 2 — Item Details</span>
+              <span class="badge badge-primary">Step 2 of 3</span>
+            </div>
+            <div class="card-body">
+              <div class="grid cols-2 gap-col-4">
+                <div class="form-group">
+                  <label class="form-label">Item Name <span class="required">*</span></label>
+                  <input class="form-control" id="fItemName" placeholder="Enter item name">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">SKU</label>
+                  <input class="form-control" id="fSku" readonly style="background:var(--bg)">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Category <span class="required">*</span></label>
+                  <select class="form-control" id="fCategory"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Brand</label>
+                  <input class="form-control" id="fBrand" placeholder="Brand name">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Color</label>
+                  <select class="form-control" id="fColor"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Size</label>
+                  <select class="form-control" id="fSize"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Unit</label>
+                  <select class="form-control" id="fUnit">
+                    <option>Piece</option><option>Set</option><option>Pair</option><option>Box</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Quantity <span class="required">*</span></label>
+                  <input class="form-control" id="fQty" type="number" min="1" value="1">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Supplier</label>
+                  <select class="form-control" id="fSupplier"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Purchase Price (₹)</label>
+                  <input class="form-control" id="fPurchasePrice" type="number" placeholder="0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Selling Price (₹)</label>
+                  <input class="form-control" id="fSellingPrice" type="number" placeholder="0">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Notes</label>
+                  <input class="form-control" id="fNotes" placeholder="Optional notes">
+                </div>
+              </div>
+              <button class="btn btn-primary mt-4" onclick="Receive.findRack()">
+                <i class="fa-solid fa-search-location"></i> Find Available Rack →
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 3: Rack Selection -->
+          <div class="card" id="rackSelectCard" style="display:none">
+            <div class="card-header">
+              <span class="card-title"><i class="fa-solid fa-layer-group" style="color:var(--primary)"></i>&nbsp; Step 3 — Select Rack</span>
+              <span class="badge badge-primary">Step 3 of 3</span>
+            </div>
+            <div class="card-body">
+              <p class="text-muted text-sm mb-4">Suggested vacant racks (sorted by availability):</p>
+              <div id="suggestedRacks"></div>
+              <div class="grid cols-2 gap-col-4 mt-4" id="locationFields" style="display:none">
+                <div class="form-group">
+                  <label class="form-label">Selected Rack</label>
+                  <input class="form-control" id="fRack" readonly style="background:var(--bg)">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Shelf</label>
+                  <input class="form-control" id="fShelf" readonly style="background:var(--bg)">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Bin</label>
+                  <input class="form-control" id="fBin" readonly style="background:var(--bg)">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Zone</label>
+                  <input class="form-control" id="fZone" readonly style="background:var(--bg)">
+                </div>
+              </div>
+              <div class="flex gap-3 mt-4" id="saveButtons" style="display:none">
+                <button class="btn btn-ghost" onclick="Receive.reset()"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                <button class="btn btn-primary" onclick="Receive.save()"><i class="fa-solid fa-check"></i> Save to Inventory</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Summary + History -->
+        <div>
+          <div class="card mb-4">
+            <div class="card-header"><span class="card-title">Today's Receiving</span></div>
+            <div class="card-body">
+              <div class="grid cols-2 gap-col-4">
+                <div style="text-align:center;padding:12px;background:var(--bg);border-radius:var(--radius-sm)">
+                  <div style="font-size:24px;font-weight:700;color:var(--primary)" id="todayCount">0</div>
+                  <div class="text-xs text-muted">Items Received</div>
+                </div>
+                <div style="text-align:center;padding:12px;background:var(--bg);border-radius:var(--radius-sm)">
+                  <div style="font-size:24px;font-weight:700;color:var(--success)" id="todayQty">0</div>
+                  <div class="text-xs text-muted">Total Qty</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Recent Receivings</span>
+            </div>
+            <div style="max-height:480px;overflow-y:auto" id="receiveHistory">
+              <div class="empty-state" style="padding:32px">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+                <p>No items received yet today</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/app.js"></script>
+<script>
+const Receive = (() => {
+  let sessionItems = [];
+  let selectedRack = null;
+  let isNewItem    = false;
+  let sessionQty   = 0;
+
+  function init() {
+    if (!window.WMS_DATA) return;
+    const D = WMS_DATA;
+
+    // Populate selects
+    const cat = document.getElementById('fCategory');
+    D.categories.forEach(c => { const o = document.createElement('option'); o.value=c; o.textContent=c; cat.appendChild(o); });
+
+    const col = document.getElementById('fColor');
+    D.colors.forEach(c => { const o = document.createElement('option'); o.value=c; o.textContent=c; col.appendChild(o); });
+
+    const sz = document.getElementById('fSize');
+    D.sizes.forEach(s => { const o = document.createElement('option'); o.value=s; o.textContent=s; sz.appendChild(o); });
+
+    const sup = document.getElementById('fSupplier');
+    D.suppliers.forEach(s => { const o = document.createElement('option'); o.value=s.id; o.textContent=s.name; sup.appendChild(o); });
+
+    // Enter key on barcode
+    document.getElementById('barcodeInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') lookup();
+    });
+
+    updateStats();
+  }
+
+  function lookup() {
+    const barcode = document.getElementById('barcodeInput').value.trim();
+    if (!barcode) { App.toast('Please enter a barcode','warning'); return; }
+
+    const existing = WMS_DATA.items.find(i => i.barcode === barcode || i.sku === barcode);
+    const resultDiv = document.getElementById('barcodeResult');
+
+    if (existing) {
+      isNewItem = false;
+      resultDiv.innerHTML = `
+        <div class="flex items-center gap-3 p-4" style="background:rgba(34,197,94,.08);border-radius:var(--radius-md);border:1px solid rgba(34,197,94,.3)">
+          <div style="width:40px;height:40px;background:rgba(34,197,94,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--success);font-size:18px">
+            <i class="fa-solid fa-check"></i>
+          </div>
+          <div>
+            <div class="font-700">Item Found — Quantity will be added</div>
+            <div class="text-sm text-muted">${existing.sku} · ${existing.name} · Current stock: <strong>${existing.qty}</strong></div>
+          </div>
+        </div>`;
+      document.getElementById('fItemName').value = existing.name;
+      document.getElementById('fSku').value      = existing.sku;
+      document.getElementById('fBrand').value    = existing.brand;
+      document.getElementById('fCategory').value = existing.category;
+      document.getElementById('fColor').value    = existing.color;
+      document.getElementById('fSize').value     = existing.size;
+      document.getElementById('fPurchasePrice').value = existing.purchasePrice;
+      document.getElementById('fSellingPrice').value  = existing.sellingPrice;
+    } else {
+      isNewItem = true;
+      resultDiv.innerHTML = `
+        <div class="flex items-center gap-3 p-4" style="background:rgba(245,158,11,.08);border-radius:var(--radius-md);border:1px solid rgba(245,158,11,.3)">
+          <div style="width:40px;height:40px;background:rgba(245,158,11,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--warning);font-size:18px">
+            <i class="fa-solid fa-plus"></i>
+          </div>
+          <div>
+            <div class="font-700">New Item — Will be created</div>
+            <div class="text-sm text-muted">Barcode ${barcode} not found. Fill in details below.</div>
+          </div>
+        </div>`;
+      document.getElementById('fSku').value = `NEW-${barcode.slice(-6)}`;
+    }
+
+    resultDiv.style.display = 'block';
+    document.getElementById('itemFormCard').style.display = 'block';
+    document.getElementById('itemFormCard').scrollIntoView({ behavior:'smooth' });
+  }
+
+  function findRack() {
+    const name = document.getElementById('fItemName').value.trim();
+    const qty  = parseInt(document.getElementById('fQty').value) || 0;
+    if (!name || !qty) { App.toast('Please fill in item name and quantity','warning'); return; }
+
+    const vacant = WMS_DATA.racks.filter(r => r.available >= qty).sort((a,b) => b.available - a.available).slice(0,6);
+    const grid   = document.getElementById('suggestedRacks');
+
+    grid.innerHTML = vacant.length ? `
+      <div class="grid cols-2 gap-col-4 mb-4">
+        ${vacant.map(r => `
+          <div class="rack-card ${r.status}" onclick="Receive.selectRack('${r.id}')" style="width:100%;cursor:pointer">
+            <div class="rack-status-dot"></div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="font-700">${r.name}</span>
+              <span class="badge ${r.status==='vacant'?'badge-success':'badge-warning'} text-xs ml-auto">${r.available} free</span>
+            </div>
+            <div class="text-xs text-muted mb-2">Zone ${r.zone} · ${r.type} · ${r.shelf}</div>
+            <div class="progress"><div class="progress-bar ${App.pctColor(r.pct)}" style="width:${r.pct}%"></div></div>
+            <div class="text-xs text-muted mt-1">${r.pct}% occupied</div>
+          </div>`).join('')}
+      </div>` : '<p class="text-muted">No racks with sufficient capacity found.</p>';
+
+    document.getElementById('rackSelectCard').style.display = 'block';
+    document.getElementById('rackSelectCard').scrollIntoView({ behavior:'smooth' });
+  }
+
+  function selectRack(id) {
+    selectedRack = WMS_DATA.racks.find(r => r.id === id);
+    if (!selectedRack) return;
+
+    document.getElementById('fRack').value  = selectedRack.name;
+    document.getElementById('fShelf').value = selectedRack.shelf;
+    document.getElementById('fBin').value   = selectedRack.bin;
+    document.getElementById('fZone').value  = `Zone ${selectedRack.zone}`;
+    document.getElementById('locationFields').style.display = 'grid';
+    document.getElementById('saveButtons').style.display    = 'flex';
+    App.toast(`Rack ${selectedRack.name} selected`, 'success');
+  }
+
+  function save() {
+    if (!selectedRack) { App.toast('Please select a rack first','warning'); return; }
+    const qty = parseInt(document.getElementById('fQty').value) || 0;
+    const name = document.getElementById('fItemName').value.trim();
+    if (!name || !qty) { App.toast('Fill in all required fields','warning'); return; }
+
+    // Update or create item
+    const barcode = document.getElementById('barcodeInput').value.trim();
+    const existing = WMS_DATA.items.find(i => i.barcode === barcode);
+    if (existing) {
+      existing.qty       += qty;
+      existing.available  = existing.qty - existing.reserved;
+      existing.status     = existing.qty < 10 ? 'Low Stock' : 'Active';
+    } else {
+      const newItem = {
+        id: `ITM-NEW-${Date.now()}`, barcode,
+        sku: document.getElementById('fSku').value,
+        name, category: document.getElementById('fCategory').value,
+        brand: document.getElementById('fBrand').value,
+        color: document.getElementById('fColor').value,
+        size:  document.getElementById('fSize').value,
+        qty, reserved: 0, available: qty,
+        rack: selectedRack.name, rackId: selectedRack.id,
+        zone: selectedRack.zone, aisle: selectedRack.aisle,
+        shelf: selectedRack.shelf, bin: selectedRack.bin,
+        warehouse: selectedRack.warehouse, warehouseName: 'Main Warehouse',
+        status: 'Active',
+        image: `https://placehold.co/80x80/0191D0/ffffff?text=NEW`,
+        addedDate: new Date().toISOString().slice(0,10),
+      };
+      WMS_DATA.items.push(newItem);
+    }
+    selectedRack.occupied  = Math.min(selectedRack.capacity, selectedRack.occupied + qty);
+    selectedRack.available = selectedRack.capacity - selectedRack.occupied;
+    selectedRack.pct       = Math.round((selectedRack.occupied / selectedRack.capacity) * 100);
+
+    sessionItems.push({ name, qty, rack: selectedRack.name, time: new Date().toLocaleTimeString() });
+    sessionQty += qty;
+    updateStats();
+    renderHistory();
+    App.toast(`${name} — ${qty} units received to ${selectedRack.name}`, 'success');
+    reset();
+  }
+
+  function reset() {
+    ['barcodeInput','fItemName','fSku','fBrand','fNotes'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    document.getElementById('fQty').value = 1;
+    document.getElementById('barcodeResult').style.display = 'none';
+    document.getElementById('itemFormCard').style.display  = 'none';
+    document.getElementById('rackSelectCard').style.display= 'none';
+    document.getElementById('locationFields').style.display= 'none';
+    document.getElementById('saveButtons').style.display   = 'none';
+    document.getElementById('suggestedRacks').innerHTML    = '';
+    selectedRack = null;
+    document.getElementById('barcodeInput').focus();
+  }
+
+  function updateStats() {
+    document.getElementById('todayCount').textContent = WMS_DATA.todayReceived + sessionItems.length;
+    document.getElementById('todayQty').textContent   = WMS_DATA.todayDispatched + sessionQty;
+  }
+
+  function renderHistory() {
+    const list = document.getElementById('receiveHistory');
+    list.innerHTML = sessionItems.slice().reverse().map(s => `
+      <div class="notif-item">
+        <div class="notif-icon-wrap success"><i class="fa-solid fa-check"></i></div>
+        <div class="notif-content">
+          <div class="notif-item-title">${s.name}</div>
+          <div class="notif-item-msg">${s.qty} units → ${s.rack}</div>
+          <div class="notif-time">${s.time}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+  return { lookup, findRack, selectRack, save, reset };
+})();
+</script>
+</body>
+</html>
