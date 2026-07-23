@@ -10,7 +10,15 @@ export const pool = mysql.createPool({
   database: process.env.DB_NAME || 'rms',
   waitForConnections: true,
   connectionLimit: 10,
+  // Managed hosts (Aiven etc.) require TLS. Set DB_SSL=true; paste the provider's
+  // CA cert into DB_CA for full verification, otherwise it connects without it.
+  ssl: sslConfig(),
 });
+
+export function sslConfig() {
+  if (process.env.DB_SSL !== 'true') return undefined;
+  return process.env.DB_CA ? { ca: process.env.DB_CA } : { rejectUnauthorized: false };
+}
 
 // Run a function inside a transaction; commit on success, rollback on throw.
 export async function withTransaction(fn) {

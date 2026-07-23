@@ -1,0 +1,11 @@
+{
+  "name": "rms",
+  "version": "1.0.0",
+  "description": "Rack Management System — monorepo (Express API + Vite React client)",
+  "private": true,
+  "scripts": {
+    "build": "npm install --include=dev --prefix client && npm run build --prefix client && npm install --omit=dev --prefix server",
+    "start": "node server/src/index.js",
+    "seed": "node server/seed.js"
+  }
+}

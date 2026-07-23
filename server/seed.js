@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import mysql from 'mysql2/promise';
+import { sslConfig } from './src/db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB = process.env.DB_NAME || 'rms';
@@ -24,9 +25,16 @@ async function main() {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     multipleStatements: true,
+    ssl: sslConfig(),
   });
 
-  await conn.query(`CREATE DATABASE IF NOT EXISTS \`${DB}\` CHARACTER SET utf8mb4`);
+  // Managed hosts often pre-create the database (e.g. Aiven's "defaultdb") and
+  // don't grant CREATE DATABASE — tolerate that and just USE it.
+  try {
+    await conn.query(`CREATE DATABASE IF NOT EXISTS \`${DB}\` CHARACTER SET utf8mb4`);
+  } catch (e) {
+    console.warn(`Could not create database ${DB} (${e.code}); assuming it already exists.`);
+  }
   await conn.query(`USE \`${DB}\``);
 
   const schema = await readFile(path.join(__dirname, 'migrations', 'schema.sql'), 'utf8');
