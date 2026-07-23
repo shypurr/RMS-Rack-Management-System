@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { pct, pctColorClass, sortByEmptiness } from '../lib/rack.js';
@@ -15,7 +15,6 @@ export default function MoveItem() {
   const [source, setSource] = useState(null);  // chosen placement { id, rack_id, qty, available }
   const [qty, setQty] = useState(1);
   const [toRackId, setToRackId] = useState('');
-  const [destSearch, setDestSearch] = useState('');
 
   const loadRacks = () => api.listRacks().then(setRacks).catch((e) => toast(e.message, 'error'));
   const loadItems = () => api.listItems().then(setItems).catch((e) => toast(e.message, 'error'));
@@ -47,12 +46,10 @@ export default function MoveItem() {
 
   const chooseSource = (p) => { setSource(p); setQty(1); setToRackId(''); };
 
-  const destRacks = sortByEmptiness(
-    racks.filter((r) => r.rack_id !== source?.rack_id && r.rack_id.toLowerCase().includes(destSearch.toLowerCase()))
-  );
+  const destCandidates = sortByEmptiness(racks.filter((r) => r.rack_id !== source?.rack_id));
   const destRack = racks.find((r) => r.rack_id === toRackId);
 
-  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(''); setQty(1); setSearch(''); setDestSearch(''); };
+  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(''); setQty(1); setSearch(''); };
 
   const doMove = async () => {
     if (!source || !toRackId) return toast('Pick a source rack and a destination', 'warning');
@@ -143,20 +140,13 @@ export default function MoveItem() {
 
       {/* Step 3 — destination */}
       {source && (
-        <div className="card mt-4">
+        <div className="card mt-4" style={{ overflow: 'visible' }}>
           <div className="card-header"><span className="card-title"><i className="fa-solid fa-layer-group text-primary-color" />&nbsp; Step 3 — Destination Rack</span></div>
           <div className="card-body">
             <div className="grid gap-col-6" style={{ gridTemplateColumns: '340px 1fr', alignItems: 'end' }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">To Rack (emptiest first)</label>
-                <div className="input-group mb-2">
-                  <span className="input-icon"><i className="fa-solid fa-search" /></span>
-                  <input className="form-control" placeholder="Search rack ID…" value={destSearch} onChange={(e) => setDestSearch(e.target.value)} />
-                </div>
-                <select className="form-control" value={toRackId} onChange={(e) => setToRackId(e.target.value)}>
-                  <option value="">Select destination… ({destRacks.length})</option>
-                  {destRacks.map((r) => <option key={r.rack_id} value={r.rack_id}>{r.rack_id} ({r.available} free{r.status === 'Vacant' ? ', empty' : ''})</option>)}
-                </select>
+                <RackCombobox key={source.id} candidates={destCandidates} value={toRackId} onChange={setToRackId} />
               </div>
 
               {destRack && (
@@ -181,5 +171,43 @@ export default function MoveItem() {
         </div>
       )}
     </>
+  );
+}
+
+// Searchable destination picker: focus (empty) shows the emptiest racks; typing
+// filters by rack id live. Same UX as AddItem's TxnCombobox, client-side.
+function RackCombobox({ candidates, value, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState(false);
+  const blurTimer = useRef(null);
+
+  const q = query.trim().toLowerCase();
+  const matches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
+
+  const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.rack_id); };
+  const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        className="form-control"
+        placeholder="Search rack ID…"
+        value={query}
+        onChange={(e) => onType(e.target.value)}
+        onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
+        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
+      />
+      {open && (
+        <div className="txn-dropdown">
+          {matches.length ? matches.map((r) => (
+            <div key={r.rack_id} className="txn-option" onMouseDown={() => choose(r)}>
+              <span className="font-600 text-primary-color">{r.rack_id}</span>
+              <span className="text-sm text-muted">&nbsp; {r.available} free{r.status === 'Vacant' ? ' · empty' : ''}</span>
+            </div>
+          )) : <div className="txn-option text-muted">No racks match</div>}
+        </div>
+      )}
+    </div>
   );
 }
