@@ -8,6 +8,16 @@ const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
 const ACTION_ICON = { add: 'plus', update: 'pen', move: 'arrow-right-long', remove: 'trash' };
 const ACTION_TONE = { add: 'success', update: 'info', move: 'warning', remove: 'danger' };
 
+// Fixed order + short labels for the source-module bar chart. Zero-count
+// modules still show a bar so the axis is stable across refreshes.
+const MODULES = [['Purchase Inward', 'PI'], ['Pack Design', 'PD'], ['Sales Return', 'SR'], ['Job Slip', 'Job Slip'], ['Manual', 'Manual']];
+const MODULE_COLORS = ['#0191D0', '#22c55e', '#f59e0b', '#a855f7', '#94a3b8'];
+function moduleChart(rows = []) {
+  const by = Object.fromEntries(rows.map((r) => [r.moduleType, r.qty]));
+  const data = MODULES.map(([k]) => by[k] || 0);
+  return { labels: MODULES.map(([, l]) => l), data, total: data.reduce((a, b) => a + b, 0) };
+}
+
 export default function Dashboard() {
   const toast = useToast();
   const [data, setData] = useState(null);
@@ -83,20 +93,20 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Top items + Recent activity */}
+      {/* Items by source module + Recent activity */}
       <div className="grid gap-col-6" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div className="card">
-          <div className="card-header"><span className="card-title"><i className="fa-solid fa-ranking-star text-primary-color" />&nbsp; Top Items by Quantity</span></div>
+          <div className="card-header"><span className="card-title"><i className="fa-solid fa-layer-group text-primary-color" />&nbsp; Items Stored by Source Module</span></div>
           <div className="card-body" style={{ height: 300 }}>
-            {data.topItems.length ? (
-              <Bar
-                options={{ ...chartOpts, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }}
-                data={{
-                  labels: data.topItems.map((i) => i.item),
-                  datasets: [{ label: 'Qty', data: data.topItems.map((i) => i.qty), backgroundColor: ['#0191D0', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#f97316', '#6366f1'], borderRadius: 4 }],
-                }}
-              />
-            ) : <div className="empty-state"><i className="fa-solid fa-inbox" /><p>No items stored yet</p></div>}
+            {(() => {
+              const m = moduleChart(data.moduleBreakdown);
+              return m.total ? (
+                <Bar
+                  options={{ ...chartOpts, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${fmt(c.parsed.y)} items` } } }, scales: { y: { beginAtZero: true } } }}
+                  data={{ labels: m.labels, datasets: [{ label: 'Items', data: m.data, backgroundColor: MODULE_COLORS, borderRadius: 6, maxBarThickness: 72 }] }}
+                />
+              ) : <div className="empty-state"><i className="fa-solid fa-inbox" /><p>No items stored yet</p></div>;
+            })()}
           </div>
         </div>
 

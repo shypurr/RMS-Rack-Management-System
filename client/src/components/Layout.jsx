@@ -62,11 +62,6 @@ export default function Layout() {
       <div className={`main-content ${collapsed ? 'expanded' : ''}`}>
         <header className="topbar">
           <div className="topbar-toggle" onClick={onToggle}><i className="fa-solid fa-bars" /></div>
-          <div className="warehouse-selector">
-            <i className="fa-solid fa-warehouse" />
-            <span>Main Warehouse</span>
-            <i className="fa-solid fa-chevron-down" style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }} />
-          </div>
           <div className="topbar-actions">
             <div className="topbar-btn" title="Full Screen"
               onClick={() => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())}>

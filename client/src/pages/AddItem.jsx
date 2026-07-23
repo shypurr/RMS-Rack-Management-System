@@ -75,8 +75,8 @@ export default function AddItem() {
 
       <div className="grid gap-col-6" style={{ gridTemplateColumns: '1fr 340px' }}>
         <div>
-          {/* Step 1 — source */}
-          <div className="card mb-4">
+          {/* Step 1 — source (overflow:visible so the txn dropdown isn't clipped by the card) */}
+          <div className="card mb-4" style={{ overflow: 'visible' }}>
             <div className="card-header"><span className="card-title"><i className="fa-solid fa-file-import text-primary-color" />&nbsp; Step 1 — Item Source</span></div>
             <div className="card-body">
               <div className="tab-bar">

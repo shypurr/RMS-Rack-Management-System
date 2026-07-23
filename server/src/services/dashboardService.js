@@ -41,9 +41,10 @@ export async function getDashboard() {
     GROUP BY DATE(created_at) ORDER BY day
   `);
 
-  const [topItems] = await pool.query(`
-    SELECT item, SUM(qty) AS qty FROM item_location
-    GROUP BY item ORDER BY qty DESC LIMIT 8
+  // Items stored per source module type (NULL = manual entry).
+  const [moduleRows] = await pool.query(`
+    SELECT COALESCE(module_type, 'Manual') AS module_type, SUM(qty) AS qty
+    FROM item_location GROUP BY COALESCE(module_type, 'Manual')
   `);
 
   const [recent] = await pool.query(`
@@ -68,7 +69,7 @@ export async function getDashboard() {
     },
     buckets: { vacant: num(buckets.vacant), partial: num(buckets.partial), full: num(buckets.full) },
     trend: trend.map((r) => ({ day: r.day, added: num(r.added), moved: num(r.moved) })),
-    topItems: topItems.map((r) => ({ item: r.item, qty: num(r.qty) })),
+    moduleBreakdown: moduleRows.map((r) => ({ moduleType: r.module_type, qty: num(r.qty) })),
     recent,
   };
 }

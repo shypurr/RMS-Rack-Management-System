@@ -15,6 +15,7 @@ export default function MoveItem() {
   const [source, setSource] = useState(null);  // chosen placement { id, rack_id, qty, available }
   const [qty, setQty] = useState(1);
   const [toRackId, setToRackId] = useState('');
+  const [destSearch, setDestSearch] = useState('');
 
   const loadRacks = () => api.listRacks().then(setRacks).catch((e) => toast(e.message, 'error'));
   const loadItems = () => api.listItems().then(setItems).catch((e) => toast(e.message, 'error'));
@@ -46,10 +47,12 @@ export default function MoveItem() {
 
   const chooseSource = (p) => { setSource(p); setQty(1); setToRackId(''); };
 
-  const destRacks = sortByEmptiness(racks.filter((r) => r.rack_id !== source?.rack_id));
+  const destRacks = sortByEmptiness(
+    racks.filter((r) => r.rack_id !== source?.rack_id && r.rack_id.toLowerCase().includes(destSearch.toLowerCase()))
+  );
   const destRack = racks.find((r) => r.rack_id === toRackId);
 
-  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(''); setQty(1); setSearch(''); };
+  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(''); setQty(1); setSearch(''); setDestSearch(''); };
 
   const doMove = async () => {
     if (!source || !toRackId) return toast('Pick a source rack and a destination', 'warning');
@@ -146,8 +149,12 @@ export default function MoveItem() {
             <div className="grid gap-col-6" style={{ gridTemplateColumns: '340px 1fr', alignItems: 'end' }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">To Rack (emptiest first)</label>
+                <div className="input-group mb-2">
+                  <span className="input-icon"><i className="fa-solid fa-search" /></span>
+                  <input className="form-control" placeholder="Search rack ID…" value={destSearch} onChange={(e) => setDestSearch(e.target.value)} />
+                </div>
                 <select className="form-control" value={toRackId} onChange={(e) => setToRackId(e.target.value)}>
-                  <option value="">Select destination…</option>
+                  <option value="">Select destination… ({destRacks.length})</option>
                   {destRacks.map((r) => <option key={r.rack_id} value={r.rack_id}>{r.rack_id} ({r.available} free{r.status === 'Vacant' ? ', empty' : ''})</option>)}
                 </select>
               </div>
