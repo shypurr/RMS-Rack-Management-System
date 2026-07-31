@@ -7,7 +7,9 @@ const router = Router();
 router.post('/', async (req, res, next) => {
   try {
     const { itemId, toRackId, qty } = req.body;
-    const result = await moveItem({ itemId: Number(itemId), toRackId, qty });
+    const result = await moveItem({
+      itemId: Number(itemId), toRackId, qty, userId: req.org.vastra_org_id,
+    });
     res.json(result);
   } catch (err) { next(err); }
 });

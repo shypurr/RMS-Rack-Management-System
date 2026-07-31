@@ -47,6 +47,13 @@ export async function getDashboard() {
     FROM item_location GROUP BY COALESCE(module_type, 'Manual')
   `);
 
+  // Biggest items by quantity in stock — the Reports "Stock by Item" pie.
+  // Capped at 8 to match the chart's colour palette.
+  const [topItems] = await pool.query(`
+    SELECT item, SUM(qty) AS qty
+    FROM item_location GROUP BY item ORDER BY qty DESC LIMIT 8
+  `);
+
   const [recent] = await pool.query(`
     SELECT id, entity_type, entity_id, action, before_json, after_json, user_id, created_at
     FROM audit_log ORDER BY id DESC LIMIT 8
@@ -70,6 +77,7 @@ export async function getDashboard() {
     buckets: { vacant: num(buckets.vacant), partial: num(buckets.partial), full: num(buckets.full) },
     trend: trend.map((r) => ({ day: r.day, added: num(r.added), moved: num(r.moved) })),
     moduleBreakdown: moduleRows.map((r) => ({ moduleType: r.module_type, qty: num(r.qty) })),
+    topItems: topItems.map((r) => ({ item: r.item, qty: num(r.qty) })),
     recent,
   };
 }

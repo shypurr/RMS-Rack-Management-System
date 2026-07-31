@@ -27,7 +27,10 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { rackId, item, color, size, qty, moduleType, moduleId } = req.body;
-    const result = await addItem({ rackId, item, color, size, qty, moduleType, moduleId });
+    const result = await addItem({
+      rackId, item, color, size, qty, moduleType, moduleId,
+      userId: req.org.vastra_org_id,
+    });
     res.status(201).json(result);
   } catch (err) { next(err); }
 });
@@ -35,7 +38,9 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/item-locations/:id — update qty (0 removes). SRS §3.2
 router.patch('/:id', async (req, res, next) => {
   try {
-    const result = await updateItemQty({ id: Number(req.params.id), qty: req.body.qty });
+    const result = await updateItemQty({
+      id: Number(req.params.id), qty: req.body.qty, userId: req.org.vastra_org_id,
+    });
     res.json(result);
   } catch (err) { next(err); }
 });

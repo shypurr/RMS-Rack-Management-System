@@ -1,8 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
 import { ToastProvider } from './components/Toast.jsx';
+import { getToken } from './api/client.js';
+import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RackList from './pages/RackList.jsx';
 import ItemManagement from './pages/ItemManagement.jsx';
@@ -19,7 +21,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <ToastProvider>
       <BrowserRouter>
         <Routes>
-          <Route element={<Layout />}>
+          {/* Outside <Layout /> — the login screen has no sidebar. */}
+          <Route path="/login" element={<Login />} />
+          {/* No token → straight to /login. A 401 from any API call also lands
+              here (see api/client.js), so an expired session self-corrects. */}
+          <Route element={getToken() ? <Layout /> : <Navigate to="/login" replace />}>
             <Route index element={<Dashboard />} />
             <Route path="racks" element={<RackList />} />
             <Route path="items" element={<ItemManagement />} />

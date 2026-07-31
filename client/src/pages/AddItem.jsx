@@ -242,7 +242,10 @@ function TxnCombobox({ moduleType, onSelect, onClear }) {
       {open && results.length > 0 && (
         <div className="txn-dropdown">
           {results.map((t) => (
-            <div key={t.id} className="txn-option" onMouseDown={() => choose(t)}>
+            // One Vastra document yields a row per line item, so `id` (the
+            // document no) repeats — line_id is what's unique. Stub rows have
+            // no line_id and are already unique by id.
+            <div key={t.line_id ?? t.id} className="txn-option" onMouseDown={() => choose(t)}>
               <span className="font-600 text-primary-color">{t.id}</span>
               <span className="text-sm text-muted">&nbsp; {t.item} {t.color} {t.size} (×{t.qty})</span>
             </div>

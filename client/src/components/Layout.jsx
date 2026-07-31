@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useTheme } from '../lib/useTheme.js';
+import { api, clearToken } from '../api/client.js';
 
 const NAV = [
   { section: 'Main Menu' },
@@ -15,10 +16,28 @@ const NAV = [
   { to: '/audit', icon: 'clock-rotate-left', label: 'Audit Log' },
 ];
 
+// "Vastra Textiles" → "VT". Two words max, so the avatar stays readable.
+const initialsOf = (name = '') =>
+  name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase() || '—';
+
 export default function Layout() {
   const { theme, toggle } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [org, setOrg] = useState(null);
+
+  // Restores the identity on a page refresh. A dead session 401s, and
+  // api/client.js redirects to /login for us.
+  useEffect(() => { api.me().then(setOrg).catch(() => {}); }, []);
+
+  const orgName = org?.name || 'Loading…';
+  const initials = initialsOf(org?.name);
+
+  const logout = async () => {
+    try { await api.logout(); } catch { /* leaving anyway */ }
+    clearToken();
+    window.location.replace('/login');
+  };
 
   const isMobile = () => window.innerWidth <= 768;
   const onToggle = () => (isMobile() ? setMobileOpen((o) => !o) : setCollapsed((c) => !c));
@@ -50,10 +69,10 @@ export default function Layout() {
         </nav>
         <div className="sidebar-footer">
           <div className="sidebar-user">
-            <div className="avatar">RK</div>
+            <div className="avatar">{initials}</div>
             <div className="sidebar-user-info">
-              <div className="sidebar-user-name">Raj Kumar</div>
-              <div className="sidebar-user-role">Warehouse Manager</div>
+              <div className="sidebar-user-name">{orgName}</div>
+              <div className="sidebar-user-role">Vastra account</div>
             </div>
           </div>
         </div>
@@ -69,11 +88,14 @@ export default function Layout() {
             </div>
             <div className={`theme-toggle ${theme === 'dark' ? 'on' : ''}`} onClick={toggle} title="Toggle Dark Mode" />
             <div className="topbar-user">
-              <div className="topbar-avatar">RK</div>
+              <div className="topbar-avatar">{initials}</div>
               <div className="topbar-user-info">
-                <div className="topbar-user-name">Raj Kumar</div>
-                <div className="topbar-user-role">Admin</div>
+                <div className="topbar-user-name">{orgName}</div>
+                <div className="topbar-user-role">Vastra account</div>
               </div>
+            </div>
+            <div className="topbar-btn" title="Log out" onClick={logout}>
+              <i className="fa-solid fa-right-from-bracket" />
             </div>
           </div>
         </header>
