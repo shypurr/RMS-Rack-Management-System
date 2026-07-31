@@ -16,6 +16,14 @@ import AuditLog from './pages/AuditLog.jsx';
 import './styles/style.css';
 import './styles/responsive.css';
 
+// Must be a component, not `getToken() ? … : …` inlined into the `element`
+// prop: that expression evaluates once when this file renders and freezes the
+// result, so logging in would save the token but still bounce back to /login
+// until a manual page reload. As a component it re-reads on every render.
+function RequireAuth() {
+  return getToken() ? <Layout /> : <Navigate to="/login" replace />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ToastProvider>
@@ -25,7 +33,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/login" element={<Login />} />
           {/* No token → straight to /login. A 401 from any API call also lands
               here (see api/client.js), so an expired session self-corrects. */}
-          <Route element={getToken() ? <Layout /> : <Navigate to="/login" replace />}>
+          <Route element={<RequireAuth />}>
             <Route index element={<Dashboard />} />
             <Route path="racks" element={<RackList />} />
             <Route path="items" element={<ItemManagement />} />
