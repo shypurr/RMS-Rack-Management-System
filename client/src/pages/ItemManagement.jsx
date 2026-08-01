@@ -17,11 +17,15 @@ export default function ItemManagement() {
   }, []);
 
   // One group per design (item name): total qty, distinct racks, and every row.
+  // Grouping stays on the name alone — item_code is an attribute of the design,
+  // and rows added before the column existed carry '' until they're backfilled,
+  // so keying on it would split one design into two lines.
   const designs = useMemo(() => {
     const map = new Map();
     for (const r of items) {
-      const g = map.get(r.item) || { item: r.item, total: 0, racks: new Set(), rows: [] };
+      const g = map.get(r.item) || { item: r.item, code: '', total: 0, racks: new Set(), rows: [] };
       g.total += r.qty;
+      g.code ||= r.item_code || '';
       g.racks.add(r.rack_id);
       g.rows.push(r);
       map.set(r.item, g);
@@ -31,7 +35,10 @@ export default function ItemManagement() {
       .sort((a, b) => a.item.localeCompare(b.item));
   }, [items]);
 
-  const filtered = designs.filter((d) => d.item.toLowerCase().includes(search.toLowerCase()));
+  const q = search.trim().toLowerCase();
+  const filtered = designs.filter(
+    (d) => d.item.toLowerCase().includes(q) || d.code.toLowerCase().includes(q)
+  );
   const totalUnits = designs.reduce((s, d) => s + d.total, 0);
 
   return (
@@ -57,7 +64,7 @@ export default function ItemManagement() {
         <div className="card-body">
           <div className="input-group" style={{ minWidth: 180 }}>
             <span className="input-icon"><i className="fa-solid fa-search" /></span>
-            <input className="form-control" placeholder="Search item…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input className="form-control" placeholder="Search item name or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
         </div>
       </div>
@@ -72,11 +79,12 @@ export default function ItemManagement() {
           ) : filtered.length ? (
             <div className="data-table-wrap">
               <table className="data-table">
-                <thead><tr><th>Item</th><th>Total Qty</th><th>Racks</th><th></th></tr></thead>
+                <thead><tr><th>Item</th><th>Item Code</th><th>Total Qty</th><th>Racks</th><th></th></tr></thead>
                 <tbody>
                   {filtered.map((d) => (
                     <tr key={d.item}>
                       <td className="font-600">{d.item}</td>
+                      <td className="text-muted">{d.code || '—'}</td>
                       <td>{d.total}</td>
                       <td>{d.rackCount}</td>
                       <td><button className="btn btn-outline btn-sm" onClick={() => setSelected(d)}>View</button></td>
@@ -105,7 +113,10 @@ function ItemModal({ design, onClose }) {
     <div className="modal-backdrop open" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 680 }}>
         <div className="modal-header">
-          <h2 className="modal-title">{design.item}</h2>
+          <div>
+            <h2 className="modal-title">{design.item}</h2>
+            {design.code && <div className="text-xs text-muted">{design.code}</div>}
+          </div>
           <div className="modal-close" onClick={onClose}><i className="fa-solid fa-xmark" /></div>
         </div>
         <div className="modal-body">

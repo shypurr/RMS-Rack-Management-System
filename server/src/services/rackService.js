@@ -64,7 +64,7 @@ export async function getRackWithItems(pool, rackId) {
   );
   if (!rack.length) throw new HttpError(404, `Rack ${rackId} not found`);
   const [items] = await pool.query(
-    `SELECT id, item, color, size, qty, module_id, module_type, updated_at
+    `SELECT id, item, item_code, color, size, qty, module_id, module_type, updated_at
      FROM item_location WHERE fk_rack_id = ? ORDER BY item, color, size`,
     [rackId]
   );
@@ -88,38 +88,47 @@ export async function findPlacements(pool, { item, color = '', size = '' }) {
 }
 
 // ── write operations ──────────────────────────────────────────────────────
-export async function addItem({ rackId, item, color = '', size = '', qty, moduleType = null, moduleId = null, userId = 'system' }) {
+export async function addItem({ rackId, item, itemCode = '', color = '', size = '', qty, moduleType = null, moduleId = null, userId = 'system' }) {
   qty = Number(qty);
   if (!item || !Number.isInteger(qty) || qty <= 0) {
     throw new HttpError(400, 'item and a positive integer qty are required');
   }
+  itemCode = (itemCode || '').trim();
   return withTransaction(async (conn) => {
     const rack = await getRackForUpdate(conn, rackId);
     assertCapacity(rack, rack.used + qty);
 
     // Merge into an identical row already in this rack (same item/color/size),
     // else insert a new row — so the same product never duplicates within a rack.
+    // item_code is deliberately NOT part of the match: it's an attribute of the
+    // design, not a separate identity, and rows predating the column carry ''.
     const [existing] = await conn.query(
-      `SELECT id, qty FROM item_location
+      `SELECT id, qty, item_code FROM item_location
        WHERE fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
       [rackId, item, color, size]
     );
     let itemId, before, after;
     if (existing.length) {
       const newQty = existing[0].qty + qty;
-      await conn.query('UPDATE item_location SET qty = ? WHERE id = ?', [newQty, existing[0].id]);
+      // Backfill the code onto a row that has none, so legacy/manual rows pick
+      // one up the first time a coded line merges into them.
+      const code = existing[0].item_code || itemCode;
+      await conn.query(
+        'UPDATE item_location SET qty = ?, item_code = ? WHERE id = ?',
+        [newQty, code, existing[0].id]
+      );
       itemId = existing[0].id;
-      before = { id: itemId, item, color, size, qty: existing[0].qty, fk_rack_id: rackId };
-      after = { id: itemId, item, color, size, qty: newQty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
+      before = { id: itemId, item, item_code: existing[0].item_code, color, size, qty: existing[0].qty, fk_rack_id: rackId };
+      after = { id: itemId, item, item_code: code, color, size, qty: newQty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
     } else {
       const [res] = await conn.query(
-        `INSERT INTO item_location (item, color, size, qty, fk_rack_id, module_id, module_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [item, color, size, qty, rackId, moduleId, moduleType]
+        `INSERT INTO item_location (item, item_code, color, size, qty, fk_rack_id, module_id, module_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [item, itemCode, color, size, qty, rackId, moduleId, moduleType]
       );
       itemId = res.insertId;
       before = null;
-      after = { id: itemId, item, color, size, qty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
+      after = { id: itemId, item, item_code: itemCode, color, size, qty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
     }
     const rackState = await recalcRack(conn, rackId);
     await writeAudit(conn, { entityType: 'item_location', entityId: itemId, action: 'add', before, after, userId });
@@ -178,17 +187,22 @@ export async function moveItem({ itemId, toRackId, qty, userId = 'system' }) {
 
     // Merge into an identical row in the destination, else insert a new one.
     const [existing] = await conn.query(
-      `SELECT id, qty FROM item_location
+      `SELECT id, qty, item_code FROM item_location
        WHERE fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
       [toRackId, src.item, src.color, src.size]
     );
     if (existing.length) {
-      await conn.query('UPDATE item_location SET qty = qty + ? WHERE id = ?', [qty, existing[0].id]);
+      // Same backfill rule as addItem: a codeless destination row adopts the
+      // code of the stock moving into it.
+      await conn.query(
+        'UPDATE item_location SET qty = qty + ?, item_code = ? WHERE id = ?',
+        [qty, existing[0].item_code || src.item_code || '', existing[0].id]
+      );
     } else {
       await conn.query(
-        `INSERT INTO item_location (item, color, size, qty, fk_rack_id, module_id, module_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [src.item, src.color, src.size, qty, toRackId, src.module_id, src.module_type]
+        `INSERT INTO item_location (item, item_code, color, size, qty, fk_rack_id, module_id, module_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [src.item, src.item_code || '', src.color, src.size, qty, toRackId, src.module_id, src.module_type]
       );
     }
 

@@ -24,6 +24,9 @@ CREATE TABLE rack_master (
 CREATE TABLE item_location (
   id          BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   item        VARCHAR(120) NOT NULL,
+  -- Vastra's itemTypeID for the design. '' for manual entries and for rows
+  -- added before the column existed; backfilled on the next merging add/move.
+  item_code   VARCHAR(60)  NOT NULL DEFAULT '',
   color       VARCHAR(60)  NOT NULL DEFAULT '',
   size        VARCHAR(60)  NOT NULL DEFAULT '',
   qty         INT NOT NULL,
@@ -57,6 +60,7 @@ CREATE TABLE source_transaction (
   id          VARCHAR(60) NOT NULL PRIMARY KEY,
   module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return') NOT NULL,
   item        VARCHAR(120) NOT NULL,
+  item_code   VARCHAR(60) NOT NULL DEFAULT '',   -- mirrors Vastra's itemTypeID
   color       VARCHAR(60) NOT NULL DEFAULT '',
   size        VARCHAR(60) NOT NULL DEFAULT '',
   qty         INT NOT NULL,

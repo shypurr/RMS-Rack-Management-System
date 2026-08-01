@@ -3,7 +3,7 @@ import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { MODULE_TYPES, occupancyBucket, pct, pctColorClass, sortByEmptiness } from '../lib/rack.js';
 
-const EMPTY = { item: '', color: '', size: '', qty: 1, moduleType: null, moduleId: null };
+const EMPTY = { item: '', itemCode: '', color: '', size: '', qty: 1, moduleType: null, moduleId: null };
 
 export default function AddItem() {
   const toast = useToast();
@@ -32,7 +32,7 @@ export default function AddItem() {
   }, [form.item, form.color, form.size]);
 
   const fillFromTxn = (t) =>
-    setForm({ item: t.item, color: t.color, size: t.size, qty: t.qty, moduleType: t.module_type, moduleId: t.id });
+    setForm({ item: t.item, itemCode: t.item_code || '', color: t.color, size: t.size, qty: t.qty, moduleType: t.module_type, moduleId: t.id });
   const clearTxn = () => setForm(EMPTY);
 
   const switchMode = (m) => {
@@ -108,6 +108,7 @@ export default function AddItem() {
             <div className="card-body">
               <div className="grid cols-2 gap-col-4">
                 <Field label="Item" required value={form.item} onChange={(v) => setForm({ ...form, item: v })} readOnly={mode === 'source' && !!form.moduleId} />
+                <Field label="Item Code" value={form.itemCode} onChange={(v) => setForm({ ...form, itemCode: v })} readOnly={mode === 'source' && !!form.moduleId} />
                 <Field label="Quantity" type="number" required value={form.qty} onChange={(v) => setForm({ ...form, qty: v })} />
                 <Field label="Color" value={form.color} onChange={(v) => setForm({ ...form, color: v })} readOnly={mode === 'source' && !!form.moduleId} />
                 <Field label="Size" value={form.size} onChange={(v) => setForm({ ...form, size: v })} readOnly={mode === 'source' && !!form.moduleId} />
@@ -181,6 +182,7 @@ export default function AddItem() {
             <div className="card-body">
               <SummaryRow label="Mode" value={mode === 'source' ? 'Source Module' : 'Manual'} />
               <SummaryRow label="Item" value={form.item || '—'} />
+              <SummaryRow label="Item Code" value={form.itemCode || '—'} />
               <SummaryRow label="Color / Size" value={`${form.color || '—'} / ${form.size || '—'}`} />
               <SummaryRow label="Qty" value={form.qty || '—'} />
               <SummaryRow label="Module" value={form.moduleType || '—'} />
@@ -247,7 +249,7 @@ function TxnCombobox({ moduleType, onSelect, onClear }) {
             // no line_id and are already unique by id.
             <div key={t.line_id ?? t.id} className="txn-option" onMouseDown={() => choose(t)}>
               <span className="font-600 text-primary-color">{t.id}</span>
-              <span className="text-sm text-muted">&nbsp; {t.item} {t.color} {t.size} (×{t.qty})</span>
+              <span className="text-sm text-muted">&nbsp; {t.item}{t.item_code ? ` · ${t.item_code}` : ''} {t.color} {t.size} (×{t.qty})</span>
             </div>
           ))}
         </div>

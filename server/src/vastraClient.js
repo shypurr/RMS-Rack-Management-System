@@ -126,11 +126,13 @@ function flatten(master, moduleType) {
     line_id: `${master.masterID ?? master.masterNo}:${kind}:${i}`,
     detail_kind: kind,
     item: d.itemName ?? '',
+    // Vastra's stable id for the design — stored on item_location as item_code
+    // and shown/searched as the item id in Item Management.
+    item_code: d.itemTypeID ?? '',
     color: d.color_name ?? '',
     size: d.size_name ?? '',
     qty: Number(d.quantity ?? 0),
     rate: d.rate === '' || d.rate == null ? null : Number(d.rate),
-    item_type_id: d.itemTypeID ?? '',
   }));
 }
 
