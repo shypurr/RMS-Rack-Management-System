@@ -7,8 +7,8 @@ const router = Router();
 
 // Set USE_VASTRA_MODULES=true to read the four real Vastra source modules
 // instead of the `source_transaction` stub table. Left off by default because
-// the module endpoint paths are still unconfirmed (see vastraClient.js) and the
-// whole demo dataset depends on the stub.
+// the whole demo dataset depends on the stub — the live read itself is done
+// (see vastraClient.js) and needs only a real api-key to switch on.
 const USE_VASTRA = process.env.USE_VASTRA_MODULES === 'true';
 
 // Live Vastra read, normalized in vastraClient to the same

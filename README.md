@@ -4,10 +4,10 @@ Rack Management module for Vastra (textile WMS). React + Vite frontend, Node/Exp
 MySQL. Implements the SRS: add / update / move items across rack bins with a shared-capacity
 guard, atomic moves, and a full audit trail.
 
-- `wms/` — design reference from the senior dev (static mockup). **Not run, not modified.**
 - `server/` — Express + MySQL API.
 - `client/` — Vite + React app (reproduces the `wms/` look).
-- `docs/` — SRS.
+- `wms/`, `docs/` — the senior dev's static mockup and the SRS. Both are **gitignored**, so a
+  fresh clone won't have them; they are reference material only, never run or modified.
 
 ## Prerequisites
 - Node 18+
@@ -68,12 +68,53 @@ host.
 | `VASTRA_API_TIMEOUT` | `10000` | ms, via `AbortSignal.timeout()`. |
 | `VASTRA_UDID` | `rms-backend` | Fixed value, accepted by Vastra. |
 | `VASTRA_DEVICE_TYPE` | `android` | Fixed value, accepted by Vastra. |
-| `USE_VASTRA_MODULES` | `false` | `true` reads Flow A from the real Vastra modules instead of the `source_transaction` stub. Leave off until the endpoints land — see [Deferred](#deferred). |
+| `USE_VASTRA_MODULES` | `false` | `true` reads Flow A from the real Vastra modules instead of the `source_transaction` stub — see [Source modules](#source-modules-flow-a). Off by default because the demo dataset lives in the stub. |
 
 `server/src/vastraClient.js` is the only module that talks to Vastra. Two notes on that API:
 every endpoint answers **HTTP 200** and puts success/failure in the body (read `status`, not
 the HTTP code), and the `authorization` header takes the **raw** access token — no `Bearer`
 prefix.
+
+### Source modules (Flow A)
+
+Flow A auto-fills Add Item from a source document (`Purchase Inward`, `Job Slip`,
+`Pack Design`, `Sales Return`). Two backends, chosen by `USE_VASTRA_MODULES`:
+
+- **off (default)** — the `source_transaction` stub table, loaded by `npm run seed`.
+- **on** — the live Vastra read, implemented in `fetchModuleTransactions()`.
+
+All four modules are **one endpoint** discriminated by a numeric `moduleType`, not four paths:
+
+```
+GET /rack-manager/basic-details?moduleType=1&search_string=Job19
+```
+
+| `moduleType` | Module | Note |
+|---|---|---|
+| 1 | Job Slip | |
+| 2 | Sales Return | Vastra calls it "Order Return" — same module |
+| 3 | Purchase Inward | |
+| 4 | Pack Design | |
+
+Notes worth keeping, all learned the hard way:
+
+- The dev-supplied path `/rekManager/basic-details` **404s**; `rack-manager` is the one that
+  resolves. The API doc writes the query separator as `&?search_string=` — that literal `?`
+  mid-query is a typo in the doc, not something to reproduce.
+- A master document carries **two** detail arrays — `designDetails` (the goods) and
+  `materialDetails` (raw material consumed). Both are physically rackable, so both are
+  flattened into rows and tagged `detail_kind: 'design' | 'material'`.
+- Rows are normalized to the shape the stub returns — `{ id, module_type, item, color, size,
+  qty }` — so the frontend needs no changes either way. The live path adds `line_id`
+  (unique per line; `id` repeats across a multi-line document), `detail_kind`, `master_id`,
+  `date`, `party`, `rate` and `item_type_id`.
+- `id` is the document's `masterNo` (`JOB-92`), not `masterID` — it's what the user types and
+  reads.
+- Paging follows `page.next` (a ready-made path), capped at 20 pages and stopped if `next`
+  ever points at itself.
+
+Failure handling is in `routes/sourceTransactions.js`: no stored Vastra token → **409**; a
+token Vastra rejects → **502** and the stored token is cleared so our state stays honest.
 
 ### Auth tables and migrations
 `migrations/schema.sql` **drops and recreates** its four tables and `npm run seed` applies
@@ -118,7 +159,10 @@ npm run seed -- --empty   # schema + 100 empty racks + source txns only, no stoc
 - `rack_master(rack_id PK, capacity, used, status)` — `used` = SUM(item qty), `status` derived
   Vacant/Occupied. DB CHECK enforces `used <= capacity`.
 - `item_location(id, item, color, size, qty, fk_rack_id, module_id, module_type)` — many rows per
-  rack (shared pool).
+  rack (shared pool). `module_id` is the source document code the stock arrived on (`SGR-1`,
+  `JOB-92`) and `module_type` which module produced it; both are `NULL` for stock added by
+  hand, which every screen renders as **Manual**. This pair is the provenance the warehouse
+  searches by — see [Finding stock](#finding-stock-by-source-module).
 - `audit_log(entity_type, entity_id, action, before_json, after_json, user_id, created_at)` —
   `user_id` is the logged-in org's `vastra_org_id`.
 - `source_transaction(...)` — stub feeding Flow A until real Vastra integration.
@@ -126,6 +170,29 @@ npm run seed -- --empty   # schema + 100 empty racks + source txns only, no stoc
   mirrored from Vastra on OTP login. `vastra_org_id` is the identity key; matching on mobile
   or name would be wrong, both change.
 - `session(token PK, org_id → organization)` — one active row per org.
+
+## Finding stock by source module
+
+The warehouse identifies stock by the document it arrived on, not just by product name, so
+**module code is searchable on every screen** alongside the item name. The rules live in one
+place — `client/src/lib/items.js` — so they can't drift page to page:
+
+| Export | Does |
+|--------|------|
+| `MANUAL` | The `'Manual'` label for stock with no source document |
+| `moduleCode(row)` | `row.module_id`, or `Manual` |
+| `searchText(row)` | Everything a row is findable by: item, module id, module type, colour, size |
+| `matches(text, query)` | Case-insensitive substring; an empty query matches everything |
+
+What each page does with them:
+
+| Page | Behaviour |
+|------|-----------|
+| Item Management | One line per **(module code, item)** pair, not per item — the same product arriving on two documents stays two lines, because that is how the floor tracks it. Manual stock sorts last. Search hits item name, module code or module type. |
+| Rack List | Searches racks by the item names *and* module codes they contain, not only by rack id |
+| Move Item | Variants show their module codes; search matches item, colour, size or code |
+| Reports | One search box filters every report, matching against all rendered columns |
+| Audit Log | Search covers action, entity, user and the before/after JSON |
 
 ## API
 Everything except `/api/health` and `/api/auth/*` requires `Authorization: Bearer <token>`.
@@ -136,13 +203,16 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | POST | `/api/auth/verify-otp` | verify → `{ token, org }` |
 | POST | `/api/auth/logout` | kill the session + the stored Vastra token |
 | GET | `/api/auth/me` | `{ id, name }` — restore a session on refresh |
+| GET | `/api/dashboard` | every dashboard widget in one aggregation |
 | GET | `/api/racks` | rack list |
 | GET | `/api/racks/:id` | rack + items (report) |
 | POST | `/api/racks` | create rack |
+| GET | `/api/item-locations` | full stock listing (Inventory Report) |
+| GET | `/api/item-locations/placements?item=&color=&size=` | racks already holding this item |
 | POST | `/api/item-locations` | add item (Flow A/B) |
 | PATCH | `/api/item-locations/:id` | update qty (0 = remove) |
 | POST | `/api/moves` | atomic move |
-| GET | `/api/source-transactions?moduleType=` | Flow A feed |
+| GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
 | GET | `/api/audit-log` | history |
 
 ## Verify (matches plan)
@@ -182,6 +252,22 @@ node server/checkAuth.js
 ```
 It talks to the configured MySQL (creating and removing one throwaway org), and skips the DB
 assertions with a notice if the database is unreachable.
+
+### Source-module read path
+
+```bash
+node server/checkModules.js
+#   ✓ request: rack-manager path, moduleType=1, search_string passed, raw token
+#   ✓ JOB-92 flattens to 2 rows (design + material) in the client row shape
+#   ✓ browse mode (no query) omits search_string entirely
+#   ✓ page.next followed across 3 pages, rows accumulated
+#   ✓ self-referential page.next terminates instead of looping
+#   ✓ all four MODULE_TYPES map to their documented moduleType numbers
+#   ✓ an unknown module name is rejected instead of silently querying moduleType=undefined
+```
+
+No database and no api-key needed — it stubs the Vastra HTTP layer with the response bodies
+verbatim from the published API doc (`…:3000/vastra-custom-api-doc/` → Rack Manager).
 
 ### Rack operations
 All of these need a session token from step 3 above.
@@ -241,16 +327,13 @@ means NXDOMAIN, i.e. the instance is deleted, not merely down.
 
 ## Deferred
 
-**Real Vastra source-module data** (replaces the `source_transaction` stub). Everything is
-wired except four strings: the endpoint paths for `Purchase Inward`, `Job Slip`,
-`Pack Design` and `Sales Return` are not published anywhere and have **not been guessed** —
-the only confirmed authenticated Vastra path so far is `GET /design/get-design-ids`. Ask the
-Vastra team, then fill in `MODULE_PATHS` in `src/vastraClient.js` (the `TODO(vastra-team)`
-marker), confirm the response field names against `normalize()` right below it, and flip
-`USE_VASTRA_MODULES=true`. The route already handles the rest: no stored token → 409, an
-expired token → 502 plus the stored token is cleared, and responses are normalized to the
-same `{ id, module_type, item, color, size, qty }` shape the stub returns, so the frontend
-needs no changes either way.
+**Switching Flow A to live Vastra data.** The integration itself is **done** — the endpoint,
+the four module numbers, flattening and paging are all implemented and covered by
+`checkModules.js` (see [Source modules](#source-modules-flow-a)). What's left is
+operational: `USE_VASTRA_MODULES` still defaults to `false` because the whole demo dataset
+lives in the `source_transaction` stub, and the live read needs a production `VASTRA_API_KEY`
+and a logged-in org's token. Flip it to `true` once you're pointing at real data — the
+frontend needs no changes.
 
 **Roles.** Login answers "which Vastra org", not "what may they do" — every authenticated org
 has full access. Also see [Scope](#scope-one-warehouse-per-deployment) on multi-tenancy and
