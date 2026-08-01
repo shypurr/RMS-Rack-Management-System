@@ -42,9 +42,6 @@ const USERS = ['system', 'anita.k', 'rahul.m', 'priya.s', 'vikram.j'];
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const pad = (n, w = 2) => String(n).padStart(w, '0');
-// Stand-in for Vastra's itemTypeID: derived from the name so the demo has stable,
-// unique, readable codes ('Banarasi Saree' → 'BAN-SAR') with nothing to maintain.
-const codeFor = (item) => item.split(' ').map((w) => w.slice(0, 3).toUpperCase()).join('-');
 const rnd = (a) => a[Math.floor(Math.random() * a.length)];
 const rndInt = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 const chance = (p) => Math.random() < p;
@@ -158,7 +155,6 @@ function buildSourceTransactions() {
         `${MODULE_PREFIX[mod]}-2026-${pad(i, 4)}`,
         mod,
         c.item,
-        codeFor(c.item),
         rnd(c.colors),
         rnd(c.sizes),
         rndInt(5, 90),
@@ -287,7 +283,7 @@ async function main() {
   // ── source transactions (Flow A feed) ──
   const srcRows = buildSourceTransactions();
   await conn.query(
-    'INSERT INTO source_transaction (id, module_type, item, item_code, color, size, qty) VALUES ?',
+    'INSERT INTO source_transaction (id, module_type, item, color, size, qty) VALUES ?',
     [srcRows]
   );
   console.log(`Seeded ${srcRows.length} source transactions.`);
@@ -303,9 +299,9 @@ async function main() {
   const stock = buildStock(racks);
   await conn.query(
     `INSERT INTO item_location
-       (item, item_code, color, size, qty, fk_rack_id, module_id, module_type, created_at, updated_at)
+       (item, color, size, qty, fk_rack_id, module_id, module_type, created_at, updated_at)
      VALUES ?`,
-    [stock.map((s) => [s.item, codeFor(s.item), s.color, s.size, s.qty, s.fk_rack_id, s.module_id, s.module_type, s.created_at, s.created_at])]
+    [stock.map((s) => [s.item, s.color, s.size, s.qty, s.fk_rack_id, s.module_id, s.module_type, s.created_at, s.created_at])]
   );
 
   // Read the auto-increment ids back so audit rows point at real item_location rows.

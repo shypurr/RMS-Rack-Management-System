@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
+import { matches } from '../lib/items.js';
 
 const ACTION_BADGE = { add: 'badge-success', update: 'badge-primary', move: 'badge-warning', remove: 'badge-danger' };
 
 export default function AuditLog() {
   const toast = useToast();
   const [rows, setRows] = useState([]);
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -14,6 +16,12 @@ export default function AuditLog() {
   }, []);
 
   const fmt = (v) => (v == null ? '—' : typeof v === 'string' ? v : JSON.stringify(v));
+
+  // The before/after JSON carries the item name and the module document, so
+  // matching against it finds an entry by either — same as everywhere else.
+  const filtered = rows.filter((r) =>
+    matches(`${r.action} ${r.entity_type} ${r.entity_id} ${r.user_id} ${fmt(r.before_json)} ${fmt(r.after_json)}`, search)
+  );
 
   return (
     <>
@@ -25,18 +33,27 @@ export default function AuditLog() {
         </div>
       </div>
 
+      <div className="card mb-4">
+        <div className="card-body">
+          <div className="input-group" style={{ minWidth: 180 }}>
+            <span className="input-icon"><i className="fa-solid fa-search" /></span>
+            <input className="form-control" placeholder="Search module code (e.g. SGR-1), item, rack or user…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </div>
+      </div>
+
       <div className="card">
         <div className="card-body">
           {loading ? (
             <div className="skeleton" style={{ height: 200 }} />
-          ) : rows.length ? (
+          ) : filtered.length ? (
             <div className="data-table-wrap">
               <table className="data-table">
                 <thead>
                   <tr><th>When</th><th>Action</th><th>Entity</th><th>By</th><th>Before</th><th>After</th></tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {filtered.map((r) => (
                     <tr key={r.id}>
                       <td className="text-muted text-xs" style={{ whiteSpace: 'nowrap' }}>{new Date(r.created_at).toLocaleString('en-IN')}</td>
                       <td><span className={`badge ${ACTION_BADGE[r.action] || 'badge-ghost'}`}>{r.action}</span></td>
@@ -50,7 +67,10 @@ export default function AuditLog() {
               </table>
             </div>
           ) : (
-            <div className="empty-state"><i className="fa-solid fa-clock-rotate-left" /><p>No activity yet</p></div>
+            <div className="empty-state">
+              <i className="fa-solid fa-clock-rotate-left" />
+              <p>{rows.length ? 'No entries match your search' : 'No activity yet'}</p>
+            </div>
           )}
         </div>
       </div>

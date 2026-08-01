@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { pct, pctColorClass, sortByEmptiness } from '../lib/rack.js';
+import { matches, moduleCode } from '../lib/items.js';
 
 const variantKey = (r) => `${r.item}|${r.color}|${r.size}`;
 
@@ -20,20 +21,23 @@ export default function MoveItem() {
   const loadItems = () => api.listItems().then(setItems).catch((e) => toast(e.message, 'error'));
   useEffect(() => { loadRacks(); loadItems(); }, []);
 
-  // Distinct item+color+size variants, with total qty across racks.
+  // Distinct item+color+size variants, with total qty across racks. A variant
+  // can hold stock from several module documents, so every code is kept — both
+  // to show and to search on.
   const variants = useMemo(() => {
     const map = new Map();
     for (const r of items) {
       const k = variantKey(r);
-      const v = map.get(k) || { item: r.item, color: r.color, size: r.size, total: 0 };
+      const v = map.get(k) || { item: r.item, color: r.color, size: r.size, total: 0, codes: new Set() };
       v.total += r.qty;
+      v.codes.add(moduleCode(r));
       map.set(k, v);
     }
     return [...map.values()].sort((a, b) => a.item.localeCompare(b.item));
   }, [items]);
 
   const filteredVariants = variants.filter((v) =>
-    `${v.item} ${v.color} ${v.size}`.toLowerCase().includes(search.toLowerCase())
+    matches(`${v.item} ${v.color} ${v.size} ${[...v.codes].join(' ')}`, search)
   );
 
   // When a variant is chosen, find every rack that holds it.
@@ -79,7 +83,7 @@ export default function MoveItem() {
           <div className="card-body">
             <div className="input-group mb-3">
               <span className="input-icon"><i className="fa-solid fa-search" /></span>
-              <input className="form-control" placeholder="Search item, color or size…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input className="form-control" placeholder="Search module code (e.g. SGR-1), item, color or size…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             <div className="data-table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
               <table className="data-table">
@@ -89,7 +93,11 @@ export default function MoveItem() {
                     const chosen = variant && variantKey(variant) === variantKey(v);
                     return (
                       <tr key={variantKey(v)} style={{ background: chosen ? 'var(--primary-alpha)' : undefined }}>
-                        <td>{v.item}</td><td>{v.color || '—'}</td><td>{v.size || '—'}</td><td>{v.total}</td>
+                        <td>
+                          <div>{v.item}</div>
+                          <ModuleCodes codes={v.codes} />
+                        </td>
+                        <td>{v.color || '—'}</td><td>{v.size || '—'}</td><td>{v.total}</td>
                         <td><button className="btn btn-outline btn-sm" onClick={() => chooseVariant(v)}>{chosen ? 'Selected' : 'Select'}</button></td>
                       </tr>
                     );
@@ -175,6 +183,20 @@ export default function MoveItem() {
 }
 
 // Searchable destination picker: focus (empty) shows the emptiest racks; typing
+// The module documents a variant's stock arrived on. Two are enough to
+// recognise it; the rest collapse into a count so the cell stays one line.
+function ModuleCodes({ codes }) {
+  const list = [...codes];
+  if (!list.length) return null;
+  const shown = list.slice(0, 2).join(', ');
+  const rest = list.length - 2;
+  return (
+    <div className="text-xs text-muted">
+      {shown}{rest > 0 ? ` +${rest}` : ''}
+    </div>
+  );
+}
+
 // filters by rack id live. Same UX as AddItem's TxnCombobox, client-side.
 function RackCombobox({ candidates, value, onChange }) {
   const [query, setQuery] = useState('');
@@ -183,7 +205,7 @@ function RackCombobox({ candidates, value, onChange }) {
   const blurTimer = useRef(null);
 
   const q = query.trim().toLowerCase();
-  const matches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
+  const rackMatches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
 
   const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.rack_id); };
   const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
@@ -200,7 +222,7 @@ function RackCombobox({ candidates, value, onChange }) {
       />
       {open && (
         <div className="txn-dropdown">
-          {matches.length ? matches.map((r) => (
+          {rackMatches.length ? rackMatches.map((r) => (
             <div key={r.rack_id} className="txn-option" onMouseDown={() => choose(r)}>
               <span className="font-600 text-primary-color">{r.rack_id}</span>
               <span className="text-sm text-muted">&nbsp; {r.available} free{r.status === 'Vacant' ? ' · empty' : ''}</span>

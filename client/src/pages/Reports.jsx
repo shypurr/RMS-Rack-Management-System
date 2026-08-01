@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { Line, Pie, sevenDayTrend } from '../lib/charts.js';
+import { MANUAL, matches, moduleCode } from '../lib/items.js';
 
 const REPORTS = {
   inventory: {
     title: 'Inventory Report', icon: 'boxes-stacked', color: 'var(--primary)', bg: 'var(--primary-alpha)', desc: 'Full stock listing',
-    headers: ['Item', 'Color', 'Size', 'Qty', 'Rack', 'Source'],
+    headers: ['Module', 'Module Type', 'Item', 'Color', 'Size', 'Qty', 'Rack'],
     fetch: () => api.listItems(),
-    row: (r) => [r.item, r.color || '—', r.size || '—', r.qty, r.rack_id, r.module_type || 'Manual'],
+    row: (r) => [moduleCode(r), r.module_type || MANUAL, r.item, r.color || '—', r.size || '—', r.qty, r.rack_id],
   },
   rack: {
     title: 'Rack Utilization', icon: 'layer-group', color: 'var(--warning)', bg: 'rgba(245,158,11,.12)', desc: 'Occupancy per rack',
@@ -35,12 +36,14 @@ export default function Reports() {
   const [dash, setDash] = useState(null);
   const [active, setActive] = useState(null); // report key
   const [rows, setRows] = useState([]);
+  const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => { api.dashboard().then(setDash).catch((e) => toast(e.message, 'error')); }, []);
 
   const openReport = async (key) => {
     setActive(key);
+    setQuery(''); // a term from the last report rarely means anything in the next
     setLoading(true);
     try {
       const data = await REPORTS[key].fetch();
@@ -53,11 +56,16 @@ export default function Reports() {
     }
   };
 
+  // Rows are arrays of already-rendered cells, so one text match covers every
+  // report — module code, item name, rack, user, whatever the report shows.
+  const visibleRows = rows.filter((r) => matches(r.join(' '), query));
+
   const exportCSV = () => {
-    if (!active || !rows.length) return;
+    if (!active || !visibleRows.length) return;
     const { headers, title } = REPORTS[active];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [headers.map(esc).join(','), ...rows.map((r) => r.map(esc).join(','))].join('\n');
+    // Exports what's on screen, filter included.
+    const csv = [headers.map(esc).join(','), ...visibleRows.map((r) => r.map(esc).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a');
     a.href = url;
@@ -121,23 +129,39 @@ export default function Reports() {
       {active && (
         <div className="card">
           <div className="card-header">
-            <span className="card-title">{REPORTS[active].title}</span>
+            <span className="card-title">
+              {REPORTS[active].title}
+              {query && <span className="text-sm text-muted">&nbsp; {visibleRows.length} of {rows.length}</span>}
+            </span>
             <div className="flex gap-2">
-              <button className="btn btn-ghost btn-sm" onClick={exportCSV} disabled={!rows.length}><i className="fa-solid fa-download" /> CSV</button>
+              <button className="btn btn-ghost btn-sm" onClick={exportCSV} disabled={!visibleRows.length}><i className="fa-solid fa-download" /> CSV</button>
               <button className="btn btn-ghost btn-sm" onClick={() => setActive(null)}><i className="fa-solid fa-xmark" /></button>
             </div>
           </div>
+          <div className="card-body" style={{ paddingBottom: 0 }}>
+            <div className="input-group">
+              <span className="input-icon"><i className="fa-solid fa-search" /></span>
+              <input className="form-control" placeholder="Search this report — module code (e.g. SGR-1), item, rack…" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </div>
+          </div>
           <div className="data-table-wrap">
-            {loading ? <div className="skeleton" style={{ height: 160, margin: 16 }} /> : rows.length ? (
+            {loading ? <div className="skeleton" style={{ height: 160, margin: 16 }} /> : visibleRows.length ? (
               <table className="data-table">
                 <thead><tr>{REPORTS[active].headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={i}>{r.map((c, j) => <td key={j} className={j >= 4 ? 'text-xs' : ''} style={{ maxWidth: 240 }}>{String(c)}</td>)}</tr>
+                  {visibleRows.map((r, i) => (
+                    // Only the audit report's Before/After columns hold raw JSON
+                    // wide enough to need the smaller type.
+                    <tr key={i}>{r.map((c, j) => <td key={j} className={active === 'audit' && j >= 4 ? 'text-xs' : ''} style={{ maxWidth: 240 }}>{String(c)}</td>)}</tr>
                   ))}
                 </tbody>
               </table>
-            ) : <div className="empty-state" style={{ padding: 32 }}><i className="fa-solid fa-inbox" /><p>No rows</p></div>}
+            ) : (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <i className="fa-solid fa-inbox" />
+                <p>{rows.length ? 'No rows match your search' : 'No rows'}</p>
+              </div>
+            )}
           </div>
         </div>
       )}

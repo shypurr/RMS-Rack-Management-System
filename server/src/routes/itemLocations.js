@@ -16,7 +16,7 @@ router.get('/placements', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, item, item_code, color, size, qty, fk_rack_id AS rack_id, module_type, module_id, updated_at
+      `SELECT id, item, color, size, qty, fk_rack_id AS rack_id, module_type, module_id, updated_at
        FROM item_location ORDER BY item, color, size`
     );
     res.json(rows);
@@ -26,9 +26,9 @@ router.get('/', async (req, res, next) => {
 // POST /api/item-locations — add item to rack (Flow A or Flow B). SRS §3.1
 router.post('/', async (req, res, next) => {
   try {
-    const { rackId, item, itemCode, color, size, qty, moduleType, moduleId } = req.body;
+    const { rackId, item, color, size, qty, moduleType, moduleId } = req.body;
     const result = await addItem({
-      rackId, item, itemCode, color, size, qty, moduleType, moduleId,
+      rackId, item, color, size, qty, moduleType, moduleId,
       userId: req.org.vastra_org_id,
     });
     res.status(201).json(result);

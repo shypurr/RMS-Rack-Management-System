@@ -3,10 +3,12 @@ import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import RackCard from '../components/RackCard.jsx';
 import { pct, pctColorClass } from '../lib/rack.js';
+import { MANUAL, matches, searchText } from '../lib/items.js';
 
 export default function RackList() {
   const toast = useToast();
   const [racks, setRacks] = useState([]);
+  const [items, setItems] = useState([]); // stock rows, so racks are findable by what's in them
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -15,7 +17,9 @@ export default function RackList() {
   const load = async () => {
     setLoading(true);
     try {
-      setRacks(await api.listRacks());
+      const [rackList, itemList] = await Promise.all([api.listRacks(), api.listItems()]);
+      setRacks(rackList);
+      setItems(itemList);
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -38,9 +42,20 @@ export default function RackList() {
     return { vacant, occupied, total: racks.length };
   }, [racks]);
 
+  // Everything a rack can be found by: its own id, plus the item names and
+  // module codes of the stock sitting in it — so "SGR-1" shows the racks that
+  // document's goods went into.
+  const rackText = useMemo(() => {
+    const map = new Map();
+    for (const it of items) {
+      map.set(it.rack_id, `${map.get(it.rack_id) || ''} ${searchText(it)}`);
+    }
+    return map;
+  }, [items]);
+
   const filtered = racks.filter(
     (r) =>
-      r.rack_id.toLowerCase().includes(search.toLowerCase()) &&
+      matches(`${r.rack_id} ${rackText.get(r.rack_id) || ''}`, search) &&
       (!statusFilter || r.status === statusFilter)
   );
 
@@ -77,7 +92,7 @@ export default function RackList() {
           <div className="flex gap-3 flex-wrap">
             <div className="input-group" style={{ flex: 1, minWidth: 180 }}>
               <span className="input-icon"><i className="fa-solid fa-search" /></span>
-              <input className="form-control" placeholder="Search rack ID…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input className="form-control" placeholder="Search rack ID, module code (e.g. SGR-1) or item name…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             <select className="form-control" style={{ width: 'auto' }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All Statuses</option>
@@ -154,11 +169,19 @@ function RackModal({ rack, onClose, onChanged }) {
             <div className="data-table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Item</th><th>Color</th><th>Size</th><th>Qty</th><th>Source</th><th></th></tr>
+                  <tr><th>Module</th><th>Item</th><th>Color</th><th>Size</th><th>Qty</th><th></th></tr>
                 </thead>
                 <tbody>
                   {rack.items.map((it) => (
                     <tr key={it.id}>
+                      <td>
+                        {it.module_id
+                          ? <div>
+                              <div className="font-700 text-primary-color">{it.module_id}</div>
+                              {it.module_type && <div className="text-xs text-muted">{it.module_type}</div>}
+                            </div>
+                          : <span className="text-muted">{MANUAL}</span>}
+                      </td>
                       <td>{it.item}</td>
                       <td>{it.color || '—'}</td>
                       <td>{it.size || '—'}</td>
@@ -166,7 +189,6 @@ function RackModal({ rack, onClose, onChanged }) {
                         <input type="number" min="0" defaultValue={it.qty} style={{ width: 70 }} className="form-control"
                           onKeyDown={(e) => { if (e.key === 'Enter') setQty(it.id, Number(e.target.value)); }} />
                       </td>
-                      <td>{it.module_type ? <span className="badge badge-primary">{it.module_type}</span> : <span className="text-muted">Manual</span>}</td>
                       <td>
                         <button className="btn btn-ghost btn-sm" onClick={() => setQty(it.id, 0)} title="Remove">
                           <i className="fa-solid fa-trash" />
