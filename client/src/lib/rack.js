@@ -16,7 +16,11 @@ export function pctColorClass(p) {
   return p >= 85 ? 'red' : p >= 50 ? 'yellow' : 'green';
 }
 
+// Inbound modules — the Add Item source dropdown. Delivery Challan is outbound
+// and belongs to the Picklist tab alone, so it is deliberately not in here.
 export const MODULE_TYPES = ['Purchase Inward', 'Job Slip', 'Pack Design', 'Sales Return'];
+
+export const PICK_MODULE_TYPE = 'Delivery Challan';
 
 // Order racks for placement: fully-empty (Vacant) first, then most free space,
 // dropping racks with no room. Shared by Add Item (Step 3) and Move (destination).

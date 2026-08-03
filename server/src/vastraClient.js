@@ -80,7 +80,13 @@ export async function verifyLoginOtp(countryCode, mobile, otp) {
 }
 
 // ── source modules (Flow A) ───────────────────────────────────────────────
+// Inbound only — these four feed putaway (Add Item) and the no-moduleType
+// fan-out in /api/source-transactions. Delivery Challan is deliberately NOT
+// here: it is outbound, and putaway must never offer it.
 export const MODULE_TYPES = ['Purchase Inward', 'Job Slip', 'Pack Design', 'Sales Return'];
+
+// Outbound (Flow C) — the picklist reads this one module and nothing else.
+export const PICK_MODULE_TYPE = 'Delivery Challan';
 
 // All four modules are ONE endpoint discriminated by a numeric moduleType —
 // same handler, same response envelope, so one normalizer covers everything.
@@ -98,6 +104,7 @@ const MODULE_IDS = {
   'Sales Return': 2,
   'Purchase Inward': 3,
   'Pack Design': 4,
+  [PICK_MODULE_TYPE]: 5, // Delivery Challan — outbound, picklist only
 };
 
 // Stop runaway paging if Vastra ever returns a self-referential `next`.

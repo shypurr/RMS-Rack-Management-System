@@ -52,10 +52,15 @@ CREATE TABLE audit_log (
 ) ENGINE=InnoDB;
 
 -- Stub for Vastra source modules until real integration.
--- Feeds Flow A auto-fill (Purchase Inward / Job Slip / Pack Design / Sales Return).
+-- Feeds Flow A auto-fill (Purchase Inward / Job Slip / Pack Design / Sales Return)
+-- and Flow C picking (Delivery Challan). Delivery Challan is outbound, so it is
+-- NOT in item_location.module_type above — a challan removes stock, it never
+-- becomes the provenance of stored stock.
+-- A stub challan spans several rows (`DC-2026-0007#1`, `#2`…) because `id` is
+-- the primary key; the picklist route groups on the part before the `#`.
 CREATE TABLE source_transaction (
   id          VARCHAR(60) NOT NULL PRIMARY KEY,
-  module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return') NOT NULL,
+  module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return','Delivery Challan') NOT NULL,
   item        VARCHAR(120) NOT NULL,
   color       VARCHAR(60) NOT NULL DEFAULT '',
   size        VARCHAR(60) NOT NULL DEFAULT '',

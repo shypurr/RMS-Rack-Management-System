@@ -33,8 +33,14 @@ const CATALOG = [
   { item: 'Nightwear Set',    colors: ['Pink', 'Grey', 'Navy', 'Printed'],                sizes: ['S', 'M', 'L', 'XL'] },
 ];
 
+// Inbound only — MODULES also stamps item_location.module_type, whose ENUM has
+// no Delivery Challan (a challan removes stock, it is never its provenance).
 const MODULES = ['Purchase Inward', 'Job Slip', 'Pack Design', 'Sales Return'];
 const MODULE_PREFIX = { 'Purchase Inward': 'PI', 'Job Slip': 'JS', 'Pack Design': 'PD', 'Sales Return': 'SR' };
+
+// Outbound feed for the Picklist tab (Flow C). Written to source_transaction only.
+const PICK_MODULE = 'Delivery Challan';
+const PICK_PREFIX = 'DC';
 // Stub names for the demo history only. Real rows written through the API carry
 // the logged-in org's vastra_org_id; these just make the "By" column in the
 // audit/movement reports meaningful before anyone has used the app.
@@ -164,6 +170,37 @@ function buildSourceTransactions() {
   return rows;
 }
 
+// Flow C feed. Delivery challans are built FROM the stock that exists so a
+// generated picklist actually resolves to racks. `stock` is empty under
+// --empty, in which case we fall back to the catalogue and every line is short
+// — which is itself a useful state to look at.
+// One challan spans several rows (`DC-2026-0001#1`, `#2`…) because
+// source_transaction.id is the primary key; the route groups on the `#` prefix.
+function buildChallans(stock) {
+  const source = stock.length ? stock : CATALOG.flatMap((c) =>
+    c.colors.slice(0, 2).map((color) => ({ item: c.item, color, size: rnd(c.sizes), qty: 0 }))
+  );
+  const rows = [];
+  for (let n = 1; n <= 14; n++) {
+    const id = `${PICK_PREFIX}-2026-${pad(n, 4)}`;
+    const seen = new Set();
+    const lineCount = rndInt(2, 5);
+    for (let i = 1; i <= lineCount; i++) {
+      const s = rnd(source);
+      const key = `${s.item}|${s.color}|${s.size}`;
+      if (seen.has(key)) continue; // merged by the picklist anyway; keep the data clean
+      seen.add(key);
+      // Usually pickable in full; ~15% deliberately over-asks so the shortage
+      // path has something to render.
+      const qty = s.qty > 1 && !chance(0.15)
+        ? rndInt(1, s.qty)
+        : (s.qty || rndInt(5, 40)) + rndInt(5, 30);
+      rows.push([`${id}#${i}`, PICK_MODULE, s.item, s.color, s.size, qty]);
+    }
+  }
+  return rows;
+}
+
 // Audit trail. Two sources:
 //   1. one `add` per stock row that exists today (backdated to its created_at)
 //   2. extra history — moves, qty corrections, removals — that explain how the
@@ -288,7 +325,17 @@ async function main() {
   );
   console.log(`Seeded ${srcRows.length} source transactions.`);
 
+  const insertChallans = async (rows) => {
+    await conn.query(
+      'INSERT INTO source_transaction (id, module_type, item, color, size, qty) VALUES ?',
+      [rows]
+    );
+    console.log(`Seeded ${rows.length} delivery challan lines.`);
+  };
+
   if (EMPTY) {
+    // No stock to build challans from — catalogue fallback, every line short.
+    await insertChallans(buildChallans([]));
     console.log('--empty: skipping stock and audit history. All racks Vacant.');
     await conn.end();
     return;
@@ -303,6 +350,9 @@ async function main() {
      VALUES ?`,
     [stock.map((s) => [s.item, s.color, s.size, s.qty, s.fk_rack_id, s.module_id, s.module_type, s.created_at, s.created_at])]
   );
+
+  // Challans reference real stock, so they are built once the stock exists.
+  await insertChallans(buildChallans(stock));
 
   // Read the auto-increment ids back so audit rows point at real item_location rows.
   const [inserted] = await conn.query(

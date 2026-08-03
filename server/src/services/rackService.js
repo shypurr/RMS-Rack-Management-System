@@ -155,6 +155,75 @@ export async function updateItemQty({ id, qty, userId = 'system' }) {
   });
 }
 
+// Picklist fulfilment (Flow C): deduct every picked quantity against one
+// Delivery Challan in a single transaction. Deduction only — a rack's `used`
+// can only fall here, so there is no capacity check.
+export async function pickItems({ picks, dcNo, userId = 'system' }) {
+  if (!Array.isArray(picks) || !picks.length) {
+    throw new HttpError(400, 'picks must be a non-empty array');
+  }
+  // Normalize first so a bad row fails before anything is locked.
+  const normalized = picks.map((p) => {
+    const id = Number(p.itemLocationId);
+    const qty = Number(p.qty);
+    if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(qty) || qty <= 0) {
+      throw new HttpError(400, 'each pick needs an itemLocationId and a positive integer qty');
+    }
+    return { id, qty };
+  });
+
+  // The same item_location row can appear twice if the client sends a split;
+  // collapse so we lock and audit each row exactly once.
+  const byId = new Map();
+  for (const p of normalized) byId.set(p.id, (byId.get(p.id) || 0) + p.qty);
+  // Ascending id order: two picklists touching the same rows lock them in the
+  // same sequence and queue instead of deadlocking.
+  const ordered = [...byId.entries()].sort((a, b) => a[0] - b[0]);
+
+  return withTransaction(async (conn) => {
+    const rackIds = new Set();
+    let removed = 0, updated = 0, totalQty = 0;
+
+    for (const [id, qty] of ordered) {
+      const before = await getItemForUpdate(conn, id);
+      if (qty > before.qty) {
+        throw new HttpError(
+          400,
+          `Cannot pick ${qty} of ${before.item} from ${before.fk_rack_id}; only ${before.qty} in stock`
+        );
+      }
+      const remaining = before.qty - qty;
+      if (remaining === 0) {
+        await conn.query('DELETE FROM item_location WHERE id = ?', [id]);
+        removed += 1;
+      } else {
+        await conn.query('UPDATE item_location SET qty = qty - ? WHERE id = ?', [qty, id]);
+        updated += 1;
+      }
+      rackIds.add(before.fk_rack_id);
+      totalQty += qty;
+      // `remove` when the row empties, `update` when it survives — both already
+      // in the audit_log.action ENUM. after_json carries the challan so the
+      // Audit Log shows WHY the stock left.
+      await writeAudit(conn, {
+        entityType: 'item_location', entityId: id,
+        action: remaining === 0 ? 'remove' : 'update',
+        before,
+        after: { picklist: dcNo, pickedQty: qty, remainingQty: remaining, rack: before.fk_rack_id },
+        userId,
+      });
+    }
+
+    // Once per distinct rack, after all deductions — a rack hit by two picks
+    // must not be recalculated against a half-applied state.
+    const racks = [];
+    for (const rackId of rackIds) {
+      racks.push({ rack_id: rackId, ...(await recalcRack(conn, rackId)) });
+    }
+    return { racks, removed, updated, pickedQty: totalQty };
+  });
+}
+
 // Atomic move: deduct from source row, merge into a same-item row in the
 // destination rack (or create one), recalc BOTH racks. All-or-nothing.
 export async function moveItem({ itemId, toRackId, qty, userId = 'system' }) {

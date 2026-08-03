@@ -51,6 +51,18 @@ export const api = {
     if (limit) p.set('limit', String(limit));
     return request(`/source-transactions?${p.toString()}`);
   },
+  // Picklist (Flow C). `challans` feeds the DC dropdown, `picklist` is
+  // read-only, `pickItems` is the one that deducts stock.
+  challans: (q = '', limit = 10) => {
+    const p = new URLSearchParams();
+    if (q) p.set('q', q);
+    if (limit) p.set('limit', String(limit));
+    return request(`/picklist/challans?${p.toString()}`);
+  },
+  picklist: (dcNo) => request(`/picklist/${encodeURIComponent(dcNo)}`),
+  pickItems: (dcNo, picks) =>
+    request(`/picklist/${encodeURIComponent(dcNo)}/pick`, { method: 'POST', body: { picks } }),
+
   auditLog: (action) => request(`/audit-log${action ? `?action=${encodeURIComponent(action)}` : ''}`),
 
   dashboard: () => request('/dashboard'),

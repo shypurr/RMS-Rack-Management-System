@@ -10,6 +10,7 @@ const NAV = [
   { to: '/items', icon: 'box', label: 'Item Management' },
   { to: '/add', icon: 'truck-ramp-box', label: 'Add Item' },
   { to: '/move', icon: 'arrows-up-down', label: 'Move Item' },
+  { to: '/picklist', icon: 'clipboard-list', label: 'Picklist' },
   { section: 'Operations' },
   { to: '/reports', icon: 'chart-bar', label: 'Reports' },
   { to: '/report', icon: 'file-lines', label: 'Rack Report' },

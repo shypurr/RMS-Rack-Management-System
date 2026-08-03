@@ -10,13 +10,15 @@
 //   (c) `page.next` is followed and rows accumulate across pages
 //   (d) paging terminates when `next` is absent or self-referential
 //   (e) all four module names map to their documented numbers
+//   (f) Delivery Challan (the outbound picklist module) is moduleType 5, is
+//       kept out of MODULE_TYPES, and flattens like any other module
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 
 const VASTRA_HOST = 'http://vastra.test';
 process.env.VASTRA_API_BASE_URL = `${VASTRA_HOST}/api/v2`;
 
-const { fetchModuleTransactions, MODULE_TYPES } = await import('./src/vastraClient.js');
+const { fetchModuleTransactions, MODULE_TYPES, PICK_MODULE_TYPE } = await import('./src/vastraClient.js');
 
 // Every intercepted request lands here so assertions can inspect what we sent.
 const sent = [];
@@ -130,5 +132,41 @@ ok('all four MODULE_TYPES map to their documented moduleType numbers');
 
 await assert.rejects(() => fetchModuleTransactions('tok-abc', 'Not A Module'));
 ok('an unknown module name is rejected instead of silently querying moduleType=undefined');
+
+// ── (f) Delivery Challan — outbound, picklist only ────────────────────────
+// Putaway (Add Item) and the no-moduleType fan-out both iterate MODULE_TYPES,
+// so a challan appearing there would offer outbound documents for inbound work.
+assert.equal(PICK_MODULE_TYPE, 'Delivery Challan');
+assert.equal(MODULE_TYPES.includes(PICK_MODULE_TYPE), false, 'DC must stay out of the inbound list');
+
+sent.length = 0;
+await fetchModuleTransactions('tok-abc', PICK_MODULE_TYPE);
+assert.equal(sent[0].url.searchParams.get('moduleType'), '5');
+ok('Delivery Challan queries moduleType=5 and is excluded from MODULE_TYPES');
+
+// A challan carries several design lines under one masterNo — that grouping is
+// what the picklist route relies on to rebuild the whole document.
+sent.length = 0;
+reply = () => ({
+  status: true,
+  page: {},
+  data: [{
+    ...JOBSLIP_MASTER,
+    masterID: 'dc-1', masterNo: 'DC-104', name: 'Ramesh',
+    designDetails: [
+      { itemName: 'Rayon Kurti', color_name: 'Blue', size_name: 'L', quantity: 30, rate: '', itemTypeID: 'a' },
+      { itemName: 'Rayon Kurti', color_name: 'Pink', size_name: 'M', quantity: 12, rate: '', itemTypeID: 'b' },
+      { itemName: 'Silk Stole', color_name: 'Gold', size_name: 'Free Size', quantity: 5, rate: '', itemTypeID: 'c' },
+    ],
+    materialDetails: [],
+  }],
+});
+rows = await fetchModuleTransactions('tok-abc', PICK_MODULE_TYPE, 'DC-104');
+assert.equal(rows.length, 3, 'a 3-line challan flattens to 3 rows');
+assert.deepEqual([...new Set(rows.map((r) => r.id))], ['DC-104'], 'all lines share one masterNo');
+assert.equal(new Set(rows.map((r) => r.line_id)).size, 3, 'line_id unique per challan line');
+assert.deepEqual(rows.map((r) => r.qty), [30, 12, 5]);
+assert.equal(rows[0].party, 'Ramesh');
+ok('a multi-line DC flattens to one row per line, all sharing the challan no');
 
 console.log('\nAll source-module checks passed.');

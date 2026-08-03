@@ -95,6 +95,12 @@ GET /rack-manager/basic-details?moduleType=1&search_string=Job19
 | 2 | Sales Return | Vastra calls it "Order Return" — same module |
 | 3 | Purchase Inward | |
 | 4 | Pack Design | |
+| 5 | Delivery Challan | **Outbound.** Picklist only — see [Picklist](#picklist-flow-c) |
+
+The first four are inbound and make up `MODULE_TYPES`, which drives both the Add Item dropdown
+and the fan-out when `/api/source-transactions` is called without a `moduleType`. Delivery
+Challan is deliberately **not** in that array (it's `PICK_MODULE_TYPE`): a challan takes stock
+out, so offering it during putaway would be wrong.
 
 Notes worth keeping, all learned the hard way:
 
@@ -113,8 +119,42 @@ Notes worth keeping, all learned the hard way:
 - Paging follows `page.next` (a ready-made path), capped at 20 pages and stopped if `next`
   ever points at itself.
 
-Failure handling is in `routes/sourceTransactions.js`: no stored Vastra token → **409**; a
-token Vastra rejects → **502** and the stored token is cleared so our state stays honest.
+Both backends live behind `services/sourceModules.js` → `fetchTransactions(org, { moduleType, q,
+limit })`, shared by the Flow A feed and the picklist so the branching exists once. Failure
+handling is there too: no stored Vastra token → **409**; a token Vastra rejects → **502** and the
+stored token is cleared so our state stays honest.
+
+### Picklist (Flow C)
+
+The outbound counterpart of Add Item. Pick a Delivery Challan, and RMS answers **which rack**
+each item on it is sitting in — then deducts the stock once the picker confirms.
+
+1. **Select a challan.** The dropdown lists the latest challans on focus and searches all of
+   them as you type, exactly like the Add Item transaction box. Selecting one loads **every
+   line** on the document, not one line.
+2. **Generate Picklist.** Builds the table — item, colour, size, quantity, and every rack
+   holding that item. Lines repeated on one challan are merged into a single row.
+   **This step is read-only; it never touches stock.**
+3. **Update Rack.** Deducts the quantities in the per-rack boxes. Boxes are pre-filled
+   largest-rack-first until the line is covered, and the picker can override them.
+
+Behaviour worth knowing:
+
+- **Split stock** — an item in several racks gets one input per rack, capped at what that rack
+  holds. The row shows `picked X / Y` and turns red when the split doesn't add up.
+- **Shortage** — if the challan asks for more than the racks hold, the row is badged
+  `short by N`. The update still deducts what exists (partial fulfilment is real), and a
+  warning toast names the short lines. An item in no rack at all reads `Not in any rack`.
+- **Atomic** — the whole picklist is one transaction. If any line over-picks, the request is
+  **400** and nothing at all is written. Rows are locked in ascending id order so two
+  concurrent picklists queue instead of deadlocking.
+- **Audit** — each picked row writes `remove` (row emptied) or `update` (partial) with the
+  challan number in `after_json`, so the Audit Log explains why the stock left.
+
+`item_location.module_type` intentionally has **no** `Delivery Challan` member — a challan
+removes stock, it never becomes the provenance of stored stock. The `source_transaction` stub
+does carry it, spreading one challan over `DC-2026-0001#1`, `#2`… because `id` is that table's
+primary key; the route groups on the part before the `#`.
 
 ### Auth tables and migrations
 `migrations/schema.sql` **drops and recreates** its four tables and `npm run seed` applies
@@ -146,7 +186,7 @@ something to show. It is idempotent — re-run it any time to get back to a clea
 | `rack_master` | 100 | `R{1-5}-S{1-4}-B{1-5}`. Capacity varies by shelf (150/120/100/60) so the utilisation report isn't uniform. ~24 Vacant, ~58 partial, ~18 at 85%+ — one rack per dashboard bucket. |
 | `item_location` | ~220 | 16-product textile catalogue with per-item colour/size runs. ~4,700 units. ~70% carry a `module_type` (Flow A), the rest are Manual. |
 | `audit_log` | ~425 | add / update / move / remove over the last 21 days, weighted recent. Every one of the last 7 days has activity (fills the trend chart) and today has both adds and moves (fills the "today" tiles). `user_id` varies across 5 stub users. |
-| `source_transaction` | 72 | 18 per module, ids like `PI-2026-0007` — searchable in the Add Item box. |
+| `source_transaction` | 72 + ~50 | 18 per inbound module, ids like `PI-2026-0007` — searchable in the Add Item box. Plus 14 delivery challans (`DC-2026-0001`, 2–5 lines each, split over `#1`/`#2`… rows) built **from the stock that exists**, so a generated picklist actually resolves to racks. ~15% of lines over-ask on purpose so the shortage path has something to render. |
 
 Invariants the seed respects, same as the API: `used = SUM(item qty)`, `used <= capacity`,
 `status` derived from `used`, and no duplicate `(item, color, size)` within a rack.
@@ -165,7 +205,8 @@ npm run seed -- --empty   # schema + 100 empty racks + source txns only, no stoc
   searches by — see [Finding stock](#finding-stock-by-source-module).
 - `audit_log(entity_type, entity_id, action, before_json, after_json, user_id, created_at)` —
   `user_id` is the logged-in org's `vastra_org_id`.
-- `source_transaction(...)` — stub feeding Flow A until real Vastra integration.
+- `source_transaction(...)` — stub feeding Flow A (inbound) and Flow C (delivery challans) until
+  real Vastra integration. Its `module_type` ENUM has the challan; `item_location`'s does not.
 - `organization(id, vastra_org_id UNIQUE, name, mobile, vastra_access_token, blocked)` —
   mirrored from Vastra on OTP login. `vastra_org_id` is the identity key; matching on mobile
   or name would be wrong, both change.
@@ -191,6 +232,7 @@ What each page does with them:
 | Item Management | One line per **(module code, item)** pair, not per item — the same product arriving on two documents stays two lines, because that is how the floor tracks it. Manual stock sorts last. Search hits item name, module code or module type. |
 | Rack List | Searches racks by the item names *and* module codes they contain, not only by rack id |
 | Move Item | Variants show their module codes; search matches item, colour, size or code |
+| Picklist | Searches delivery challans by challan no; the generated list resolves each line to its racks by exact `(item, colour, size)` |
 | Reports | One search box filters every report, matching against all rendered columns |
 | Audit Log | Search covers action, entity, user and the before/after JSON |
 
@@ -212,7 +254,10 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | POST | `/api/item-locations` | add item (Flow A/B) |
 | PATCH | `/api/item-locations/:id` | update qty (0 = remove) |
 | POST | `/api/moves` | atomic move |
-| GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
+| GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed, inbound modules only. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
+| GET | `/api/picklist/challans?q=&limit=` | delivery challans, grouped one entry per **document** |
+| GET | `/api/picklist/:dcNo` | the picklist — every line with its racks, `available`, `shortage` and a suggested split. Read-only |
+| POST | `/api/picklist/:dcNo/pick` | `{ picks: [{ itemLocationId, qty }] }` — deducts the stock. Atomic |
 | GET | `/api/audit-log` | history |
 
 ## Verify (matches plan)
@@ -264,6 +309,8 @@ node server/checkModules.js
 #   ✓ self-referential page.next terminates instead of looping
 #   ✓ all four MODULE_TYPES map to their documented moduleType numbers
 #   ✓ an unknown module name is rejected instead of silently querying moduleType=undefined
+#   ✓ Delivery Challan queries moduleType=5 and is excluded from MODULE_TYPES
+#   ✓ a multi-line DC flattens to one row per line, all sharing the challan no
 ```
 
 No database and no api-key needed — it stubs the Vastra HTTP layer with the response bodies
@@ -291,6 +338,42 @@ curl -s -X POST localhost:4000/api/moves \
   -d '{"itemId":1,"toRackId":"R01-S01-B02","qty":2}'
 
 curl -s localhost:4000/api/audit-log -H "Authorization: Bearer $T"   # who/when/before/after
+```
+
+### Picklist
+Same token. Pick any challan id from the first call.
+
+```bash
+T=<token>
+
+# challans, grouped one entry per document
+curl -s localhost:4000/api/picklist/challans -H "Authorization: Bearer $T"
+
+# the picklist — note `suggested` fills the largest rack first, and `shortage`
+# is > 0 when the challan asks for more than the racks hold
+curl -s localhost:4000/api/picklist/DC-2026-0001 -H "Authorization: Bearer $T"
+
+# generating changed nothing: re-read the racks and compare `used` — identical
+curl -s localhost:4000/api/racks -H "Authorization: Bearer $T"
+
+# over-pick guard — expect 400 AND no partial write (the valid pick in the same
+# request must roll back too)
+curl -s -X POST localhost:4000/api/picklist/DC-2026-0001/pick \
+  -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"picks":[{"itemLocationId":16,"qty":99999},{"itemLocationId":155,"qty":5}]}'
+
+# the real deduction — rows decrement (deleted at zero), both racks recalc,
+# and the audit rows carry the challan number
+curl -s -X POST localhost:4000/api/picklist/DC-2026-0001/pick \
+  -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"picks":[{"itemLocationId":16,"qty":10}]}'
+```
+
+Delivery Challan must never appear in the inbound feed — this should list four module types
+and no challan:
+
+```bash
+curl -s "localhost:4000/api/source-transactions?limit=100" -H "Authorization: Bearer $T"
 ```
 
 ## Troubleshooting
@@ -328,7 +411,8 @@ means NXDOMAIN, i.e. the instance is deleted, not merely down.
 ## Deferred
 
 **Switching Flow A to live Vastra data.** The integration itself is **done** — the endpoint,
-the four module numbers, flattening and paging are all implemented and covered by
+the five module numbers (four inbound plus the Delivery Challan the picklist reads), flattening
+and paging are all implemented and covered by
 `checkModules.js` (see [Source modules](#source-modules-flow-a)). What's left is
 operational: `USE_VASTRA_MODULES` still defaults to `false` because the whole demo dataset
 lives in the `source_transaction` stub, and the live read needs a production `VASTRA_API_KEY`
