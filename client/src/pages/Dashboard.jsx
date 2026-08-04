@@ -48,7 +48,7 @@ export default function Dashboard() {
         </div>
         <div className="flex gap-2">
           <button className="btn btn-ghost" onClick={load}><i className="fa-solid fa-rotate" /> Refresh</button>
-          <Link to="/add" className="btn btn-primary"><i className="fa-solid fa-plus" /> Add Item</Link>
+          <Link to="/add" className="btn btn-primary"><i className="fa-solid fa-plus" /> Add Stock</Link>
         </div>
       </div>
 
