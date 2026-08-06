@@ -1,29 +1,89 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 
-// Outbound counterpart of Add Item: pick a Delivery Challan, see every line it
-// asks for, then find out which rack each item sits in.
+// Outbound counterpart of Add Item: work through a Delivery Challan and find
+// out which rack each item on it is sitting in.
 //
-// Two deliberate steps. "Generate Picklist" only READS — a picker can generate
-// the same challan all day without touching stock. "Update Rack" is the one
-// that deducts, and only what is in the qty boxes.
+// Today the challan is typed in by hand — the user reads it off the Vastra app
+// and enters the number and its lines here. Vastra does not serve a Delivery
+// Challan module yet; when it does, the "From Vastra Module" tab takes over and
+// nothing else about this page changes.
+//
+// Two deliberate steps either way. "Generate Picklist" only READS. "Update
+// Rack" is the one that deducts, and only what is in the qty boxes.
+
+const EMPTY_DRAFT = { item: '', color: '', sizeQty: {}, freeSize: '', freeQty: '' };
+
 export default function Picklist() {
   const toast = useToast();
-  const [dc, setDc] = useState(null);          // { id, date, party, lines, qty }
-  const [detail, setDetail] = useState(null);  // { dcNo, party, date, rows: [...] }
-  const [alloc, setAlloc] = useState({});      // { [placementId]: qty } — the editable boxes
+  const [mode, setMode] = useState('manual'); // 'manual' | 'module'
+
+  // Challan header + the lines making it up.
+  const [dcNo, setDcNo] = useState('');
+  const [party, setParty] = useState('');
+  const [date, setDate] = useState('');
+  const [lines, setLines] = useState([]);
+  const [draft, setDraft] = useState(EMPTY_DRAFT);
+
+  const [stock, setStock] = useState([]);
+  const [detail, setDetail] = useState(null);
+  const [alloc, setAlloc] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [dcResetKey, setDcResetKey] = useState(0);
 
+  // Typed item/colour/size text has to match the stored stock exactly for a
+  // rack lookup to hit, so every field is backed by what is actually in the
+  // racks rather than left as free text with no safety net.
+  useEffect(() => { api.listItems().then(setStock).catch((e) => toast(e.message, 'error')); }, []);
+
+  const catalog = useMemo(() => {
+    const byItem = new Map();
+    for (const r of stock) {
+      const colors = byItem.get(r.item) || new Map();
+      const sizes = colors.get(r.color || '') || new Map();
+      sizes.set(r.size || '', (sizes.get(r.size || '') || 0) + Number(r.qty || 0));
+      colors.set(r.color || '', sizes);
+      byItem.set(r.item, colors);
+    }
+    return byItem;
+  }, [stock]);
+
+  const itemNames = useMemo(() => [...catalog.keys()].sort(), [catalog]);
+  const draftColors = useMemo(
+    () => [...(catalog.get(draft.item)?.keys() ?? [])].sort(),
+    [catalog, draft.item]
+  );
+  const draftSizes = useMemo(() => {
+    const sizes = catalog.get(draft.item)?.get(draft.color);
+    return sizes ? [...sizes.entries()].sort((a, b) => sizeKey(a[0]) - sizeKey(b[0]) || a[0].localeCompare(b[0])) : [];
+  }, [catalog, draft.item, draft.color]);
+
+  // Any edit to the challan invalidates a picklist generated from the old one.
   const clearPicklist = () => { setDetail(null); setAlloc({}); };
+  const editLines = (next) => { setLines(next); clearPicklist(); };
 
-  const generate = async (dcNo = dc?.id) => {
-    if (!dcNo) return;
+  const addDraft = () => {
+    if (!draft.item.trim()) return toast('Pick an item first', 'warning');
+    const added = draftSizes.length
+      ? draftSizes
+          .map(([size]) => ({ size, qty: Number(draft.sizeQty[size]) || 0 }))
+          .filter((s) => s.qty > 0)
+          .map((s) => ({ item: draft.item.trim(), color: draft.color, size: s.size, qty: s.qty }))
+      : [{ item: draft.item.trim(), color: draft.color.trim(), size: draft.freeSize.trim(), qty: Number(draft.freeQty) || 0 }]
+          .filter((l) => l.qty > 0);
+
+    if (!added.length) return toast('Enter a quantity against at least one size', 'warning');
+    editLines([...lines, ...added]);
+    setDraft(EMPTY_DRAFT);
+  };
+
+  const generate = async (dc = dcNo) => {
     setLoading(true);
     try {
-      const res = await api.picklist(dcNo);
+      const res = mode === 'manual'
+        ? await api.resolvePicklist({ dcNo: dc, party, date: date || null, lines })
+        : await api.picklist(dc);
       setDetail(res);
       // Seed the boxes from the server's largest-rack-first suggestion.
       const next = {};
@@ -57,7 +117,8 @@ export default function Picklist() {
       if (short.length) {
         toast(`${short.length} line(s) still short: ${short.map((r) => r.item).join(', ')}`, 'warning');
       }
-      await generate(detail.dcNo); // re-read so the rack quantities on screen are live
+      setStock(await api.listItems());   // the catalogue's availability just changed
+      await generate(detail.dcNo);        // re-read so the rack quantities on screen are live
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -65,12 +126,21 @@ export default function Picklist() {
     }
   };
 
+  const lineTotal = lines.reduce((s, l) => s + l.qty, 0);
   const totals = detail
     ? detail.rows.reduce(
         (a, r) => ({ qty: a.qty + r.qty, available: a.available + r.available, short: a.short + r.shortage }),
         { qty: 0, available: 0, short: 0 }
       )
     : null;
+  const canGenerate = mode === 'manual' ? !!dcNo.trim() && lines.length > 0 : !!dcNo.trim();
+
+  const switchMode = (m) => {
+    setMode(m);
+    setDcNo(''); setParty(''); setDate('');
+    setLines([]); setDraft(EMPTY_DRAFT);
+    clearPicklist();
+  };
 
   return (
     <>
@@ -78,62 +148,154 @@ export default function Picklist() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Picklist</h1>
-          <p className="page-subtitle">Pick stock against a Delivery Challan — find the racks, then update them</p>
+          <p className="page-subtitle">Enter a Delivery Challan and find the racks to pick it from</p>
         </div>
       </div>
 
       <div className="grid gap-col-6" style={{ gridTemplateColumns: '1fr 340px', alignItems: 'start' }}>
         <div>
-          {/* Step 1 — challan (overflow:visible so the dropdown isn't clipped by the card) */}
+          {/* Step 1 — the challan itself (overflow:visible so the module dropdown isn't clipped) */}
           <div className="card mb-4" style={{ overflow: 'visible' }}>
             <div className="card-header"><span className="card-title"><i className="fa-solid fa-file-invoice text-primary-color" />&nbsp; Step 1 — Delivery Challan</span></div>
             <div className="card-body">
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Challan No <span className="required">*</span></label>
-                <DcCombobox
-                  key={dcResetKey}
-                  onSelect={(d) => { setDc(d); clearPicklist(); }}
-                  onClear={() => { setDc(null); clearPicklist(); }}
-                />
-                <p className="text-xs text-muted mt-1">Latest challans are listed on focus — type a challan no. to search all of them.</p>
+              <div className="tab-bar">
+                <div className={`tab-btn ${mode === 'manual' ? 'active' : ''}`} onClick={() => switchMode('manual')}>Manual Entry</div>
+                <div className={`tab-btn ${mode === 'module' ? 'active' : ''}`} onClick={() => switchMode('module')}>From Vastra Module</div>
               </div>
+
+              {mode === 'manual' && (
+                <>
+                  <div className="grid cols-3 gap-col-4">
+                    <Field label="Challan No" required value={dcNo} placeholder="e.g. DC-5044"
+                      onChange={(v) => { setDcNo(v); clearPicklist(); }} />
+                    <Field label="Party" value={party} placeholder="optional" onChange={setParty} />
+                    <Field label="Date" type="date" value={date} onChange={setDate} />
+                  </div>
+                  <p className="text-xs text-muted">
+                    Read these off the challan in the Vastra app. The Delivery Challan API isn&apos;t available
+                    yet — once it is, the other tab fills this in automatically.
+                  </p>
+                </>
+              )}
+
+              {mode === 'module' && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Challan No <span className="required">*</span></label>
+                  <DcCombobox onSelect={(d) => { setDcNo(d.id); setParty(d.party || ''); clearPicklist(); }}
+                    onClear={() => { setDcNo(''); clearPicklist(); }} />
+                  <p className="text-xs text-muted mt-1">
+                    Reads delivery challans straight from Vastra. Not serving this module yet — use Manual Entry.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Step 2 — the challan's lines, auto-filled */}
-          <div className="card">
-            <div className="card-header">
-              <span className="card-title"><i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — Challan Details</span>
-              {dc && <span className="badge badge-ghost">{dc.lines} line{dc.lines > 1 ? 's' : ''}</span>}
-            </div>
-            <div className="card-body">
-              {!dc && <p className="text-muted">Select a delivery challan above to load its items.</p>}
-              {dc && (
-                <>
-                  <div className="data-table-wrap">
+          {/* Step 2 — the lines. A challan lists one design across a run of sizes,
+              so a design is entered once and its sizes filled in together. */}
+          {mode === 'manual' && (
+            <div className="card mb-4">
+              <div className="card-header"><span className="card-title"><i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — Items on the Challan</span></div>
+              <div className="card-body">
+                <div className="grid cols-2 gap-col-4">
+                  <div className="form-group">
+                    <label className="form-label">Item / Design <span className="required">*</span></label>
+                    <input className="form-control" list="pick-items" placeholder="Start typing an item name…"
+                      value={draft.item}
+                      onChange={(e) => setDraft({ ...EMPTY_DRAFT, item: e.target.value })} />
+                    <datalist id="pick-items">
+                      {itemNames.map((n) => <option key={n} value={n} />)}
+                    </datalist>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Color</label>
+                    {draftColors.length > 0 ? (
+                      <select className="form-control" value={draft.color}
+                        onChange={(e) => setDraft({ ...draft, color: e.target.value, sizeQty: {} })}>
+                        <option value="">Select a color…</option>
+                        {draftColors.map((c) => <option key={c} value={c}>{c || '(no color)'}</option>)}
+                      </select>
+                    ) : (
+                      <input className="form-control" placeholder="Color" value={draft.color}
+                        onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
+                    )}
+                  </div>
+                </div>
+
+                {/* The size run — the shape a challan actually takes */}
+                {draftSizes.length > 0 && (
+                  <>
+                    <label className="form-label">Quantity per size</label>
+                    <div className="size-run mb-3">
+                      {draftSizes.map(([size, have]) => (
+                        <div key={size} className="size-cell">
+                          <div className="size-cell-label">{size || '(no size)'}</div>
+                          <input className="form-control" type="number" min="0" placeholder="0"
+                            value={draft.sizeQty[size] ?? ''}
+                            onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
+                          <div className="size-cell-stock">{have} in stock</div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Nothing in stock matches — take it anyway, it'll flag as short */}
+                {draft.item && draftSizes.length === 0 && (
+                  <div className="grid cols-2 gap-col-4">
+                    <Field label="Size" value={draft.freeSize} onChange={(v) => setDraft({ ...draft, freeSize: v })} />
+                    <Field label="Quantity" type="number" value={draft.freeQty} onChange={(v) => setDraft({ ...draft, freeQty: v })} />
+                  </div>
+                )}
+                {draft.item && draftSizes.length === 0 && !catalog.has(draft.item) && (
+                  <p className="text-xs text-danger mb-3">
+                    <i className="fa-solid fa-triangle-exclamation" />&nbsp;
+                    &ldquo;{draft.item}&rdquo; isn&apos;t in any rack — it can go on the challan but will show as short.
+                  </p>
+                )}
+
+                <button className="btn btn-outline" onClick={addDraft} disabled={!draft.item}>
+                  <i className="fa-solid fa-plus" /> Add to challan
+                </button>
+
+                {lines.length > 0 && (
+                  <div className="data-table-wrap mt-4">
                     <table className="data-table">
                       <thead>
-                        <tr><th>Challan No</th><th>Party</th><th>Date</th><th>Lines</th><th>Total Qty</th></tr>
+                        <tr><th>Item / Design</th><th>Color</th><th>Size</th><th>Qty</th><th /></tr>
                       </thead>
                       <tbody>
+                        {lines.map((l, i) => (
+                          <tr key={`${l.item}|${l.color}|${l.size}|${i}`}>
+                            <td className="font-600">{l.item}</td>
+                            <td>{l.color || '—'}</td>
+                            <td>{l.size || '—'}</td>
+                            <td>{l.qty}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              <button className="btn btn-ghost btn-sm" title="Remove line"
+                                onClick={() => editLines(lines.filter((_, j) => j !== i))}>
+                                <i className="fa-solid fa-xmark" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
                         <tr>
-                          <td className="font-700 text-primary-color">{dc.id}</td>
-                          <td>{dc.party || '—'}</td>
-                          <td>{fmtDate(dc.date)}</td>
-                          <td>{dc.lines}</td>
-                          <td>{dc.qty}</td>
+                          <td className="font-700" colSpan={3}>Total</td>
+                          <td className="font-700">{lineTotal}</td>
+                          <td />
                         </tr>
                       </tbody>
                     </table>
                   </div>
-                  <button className="btn btn-primary mt-4" onClick={() => generate()} disabled={loading}>
-                    <i className={`fa-solid ${loading ? 'fa-spinner fa-spin' : 'fa-clipboard-list'}`} />
-                    &nbsp; {loading ? 'Generating…' : 'Generate Picklist'}
-                  </button>
-                </>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )}
+
+          <button className="btn btn-primary" onClick={() => generate()} disabled={loading || !canGenerate}>
+            <i className={`fa-solid ${loading ? 'fa-spinner fa-spin' : 'fa-clipboard-list'}`} />
+            &nbsp; {loading ? 'Generating…' : 'Generate Picklist'}
+          </button>
         </div>
 
         {/* Right summary */}
@@ -141,12 +303,12 @@ export default function Picklist() {
           <div className="card">
             <div className="card-header"><span className="card-title">Summary</span></div>
             <div className="card-body">
-              <SummaryRow label="Challan No" value={dc?.id || '—'} />
-              <SummaryRow label="Party" value={dc?.party || '—'} />
-              <SummaryRow label="Date" value={fmtDate(dc?.date)} />
+              <SummaryRow label="Challan No" value={dcNo || '—'} />
+              <SummaryRow label="Party" value={party || '—'} />
+              <SummaryRow label="Date" value={date || '—'} />
               <hr className="divider" />
-              <SummaryRow label="Lines" value={detail ? detail.rows.length : dc?.lines ?? '—'} />
-              <SummaryRow label="Total qty" value={totals ? totals.qty : '—'} />
+              <SummaryRow label="Lines" value={detail ? detail.rows.length : lines.length || '—'} />
+              <SummaryRow label="Total qty" value={totals ? totals.qty : lineTotal || '—'} />
               <SummaryRow label="In racks" value={totals ? totals.available : '—'} />
               <SummaryRow label="Short" value={totals ? totals.short : '—'} />
               <hr className="divider" />
@@ -228,6 +390,9 @@ export default function Picklist() {
   );
 }
 
+// Numeric sizes (36, 38, 42) before lettered ones, each in its own order.
+const sizeKey = (s) => (/^\d+$/.test(s) ? Number(s) : Infinity);
+
 // Keep a box within [0, that rack's stock]; a cleared box reads as 0, not NaN.
 function clamp(v, max) {
   const n = Math.floor(Number(v));
@@ -235,15 +400,14 @@ function clamp(v, max) {
   return Math.min(n, max);
 }
 
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
-
-// Searchable challan picker: open (empty) shows the latest 10; typing a challan
-// no. searches all of them server-side. Same UX as AddItem's TxnCombobox.
+// Searchable challan picker for the module tab: open (empty) shows the latest
+// 10; typing searches all of them. Same UX as AddItem's TxnCombobox.
 function DcCombobox({ onSelect, onClear }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState(false);
+  const [error, setError] = useState('');
   const blurTimer = useRef(null);
 
   // Debounced fetch: latest 10 when empty, matches when typing. Skip while a
@@ -251,7 +415,9 @@ function DcCombobox({ onSelect, onClear }) {
   useEffect(() => {
     if (picked) return;
     const t = setTimeout(() => {
-      api.challans(query.trim(), 10).then(setResults).catch(() => setResults([]));
+      api.challans(query.trim(), 10)
+        .then((r) => { setResults(r); setError(''); })
+        .catch((e) => { setResults([]); setError(e.message); });
     }, query.trim() ? 200 : 0);
     return () => clearTimeout(t);
   }, [query, picked]);
@@ -273,7 +439,7 @@ function DcCombobox({ onSelect, onClear }) {
     <div style={{ position: 'relative' }}>
       <input
         className="form-control"
-        placeholder="Search challan no (e.g. DC-2026-0007)…"
+        placeholder="Search challan no…"
         value={query}
         onChange={(e) => onType(e.target.value)}
         onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
@@ -285,15 +451,28 @@ function DcCombobox({ onSelect, onClear }) {
             <div key={d.id} className="txn-option" onMouseDown={() => choose(d)}>
               <span className="font-600 text-primary-color">{d.id}</span>
               <span className="text-sm text-muted">
-                &nbsp; {d.party || 'No party'} · {d.lines} item{d.lines > 1 ? 's' : ''} · {fmtDate(d.date)}
+                &nbsp; {d.party || 'No party'} · {d.lines} item{d.lines > 1 ? 's' : ''} · {d.date || '—'}
               </span>
             </div>
           ))}
         </div>
       )}
       {open && results.length === 0 && (
-        <div className="txn-dropdown"><div className="txn-option text-muted">No matching challans</div></div>
+        <div className="txn-dropdown">
+          <div className="txn-option text-muted">{error || 'No matching challans'}</div>
+        </div>
       )}
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = 'text', required, placeholder }) {
+  return (
+    <div className="form-group">
+      <label className="form-label">{label} {required && <span className="required">*</span>}</label>
+      <input className="form-control" type={type} value={value} placeholder={placeholder}
+        min={type === 'number' ? 0 : undefined}
+        onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }

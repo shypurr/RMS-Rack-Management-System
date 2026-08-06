@@ -69,6 +69,7 @@ host.
 | `VASTRA_UDID` | `rms-backend` | Fixed value, accepted by Vastra. |
 | `VASTRA_DEVICE_TYPE` | `android` | Fixed value, accepted by Vastra. |
 | `USE_VASTRA_MODULES` | `false` | `true` reads Flow A from the real Vastra modules instead of the `source_transaction` stub — see [Source modules](#source-modules-flow-a). Off by default because the demo dataset lives in the stub. |
+| `USE_VASTRA_PICKLIST` | follows `USE_VASTRA_MODULES` | Same switch for the challan feed alone. Set it to `false` to pick against the sample challans from `makeChallans.js` while Add Item keeps reading live Vastra — see [Sample challans](#sample-challans-to-test-with). |
 
 `server/src/vastraClient.js` is the only module that talks to Vastra. Two notes on that API:
 every endpoint answers **HTTP 200** and puts success/failure in the body (read `status`, not
@@ -121,22 +122,78 @@ Notes worth keeping, all learned the hard way:
 
 Both backends live behind `services/sourceModules.js` → `fetchTransactions(org, { moduleType, q,
 limit })`, shared by the Flow A feed and the picklist so the branching exists once. Failure
-handling is there too: no stored Vastra token → **409**; a token Vastra rejects → **502** and the
-stored token is cleared so our state stays honest.
+handling is there too: no stored Vastra token → **409**; a rejection → **502**.
+
+Vastra answers `status:false` for *everything* it refuses, so an expired token and a module it
+won't serve are indistinguishable at the transport level. Only an **auth-shaped** rejection
+clears the stored token; anything else surfaces Vastra's own message and leaves the session
+alone — otherwise one unsupported module logs the org out of the four that work. Learned by
+asking for `moduleType=5` before Vastra had it.
 
 ### Picklist (Flow C)
 
-The outbound counterpart of Add Item. Pick a Delivery Challan, and RMS answers **which rack**
-each item on it is sitting in — then deducts the stock once the picker confirms.
+The outbound counterpart of Add Item. Work through a Delivery Challan and RMS answers **which
+rack** each item on it is sitting in — then deducts the stock once the picker confirms.
 
-1. **Select a challan.** The dropdown lists the latest challans on focus and searches all of
-   them as you type, exactly like the Add Item transaction box. Selecting one loads **every
-   line** on the document, not one line.
+> **Vastra does not serve the Delivery Challan module yet.** So the challan is entered by hand:
+> the user generates it in the Vastra app, then types its number and lines here. The
+> module-driven path is built and wired behind the *From Vastra Module* tab — when the API
+> lands, switching over is a UI toggle, not a rewrite. Both tabs feed the same resolver
+> (`resolveLines()` in `routes/picklist.js`), so they cannot drift apart.
+
+1. **Enter the challan.** Challan number (required), party and date (optional). Then add its
+   items. **Size runs are the point here** — pick a design once and fill in a quantity per
+   size, the way the challan is laid out.
 2. **Generate Picklist.** Builds the table — item, colour, size, quantity, and every rack
    holding that item. Lines repeated on one challan are merged into a single row.
    **This step is read-only; it never touches stock.**
 3. **Update Rack.** Deducts the quantities in the per-rack boxes. Boxes are pre-filled
    largest-rack-first until the line is covered, and the picker can override them.
+
+Manual entry is backed by the stock actually in the racks: the item field autocompletes from
+it, colour narrows to that item's colours, and the size run shows each size with how much is
+on hand. A rack lookup matches `(item, colour, size)` **exactly**, so free-typing a name that
+doesn't exist would silently find nothing — the form warns instead, and the line still goes on
+the challan and reports as short.
+
+Nothing about a manually entered challan is persisted. The durable record is the audit trail
+written when the racks are updated, which carries the challan number.
+
+**Size runs.** A real challan lists one design once and spreads it across a row of sizes:
+
+```
+Sr  Item             Color      36  38  42  44  46  L   Total
+1   DES-5044 Janki   No Color   1   2   3   1   1   1   9
+```
+
+That reaches RMS as one line per size — same item, same colour, different size, its own
+quantity — because each size can sit in a different rack. The picklist keeps a design's sizes
+adjacent (numeric sizes sort numerically, lettered ones alphabetically) so it reads the way
+the challan does.
+
+### Sample challans to test with
+
+Only relevant to the *From Vastra Module* tab — manual entry needs no sample data, just stock
+in the racks. Useful for exercising that path before the real API exists.
+
+`node server/makeChallans.js` adds sample challans to a database that already has stock.
+Unlike `npm run seed` it **drops nothing** — racks, stock and audit history are untouched.
+Challans are generated from the stock actually in the racks, so the picklist resolves to real
+rack ids instead of showing every line short, and each one carries a size run.
+
+```bash
+node server/makeChallans.js            # add 14 challans
+node server/makeChallans.js 30         # add 30
+node server/makeChallans.js --replace  # delete the existing sample challans first
+```
+
+It brings an older database up to date on its own (adds `party` / `doc_date`, widens the
+`module_type` ENUM) and continues the numbering rather than colliding with what's there.
+
+To read those samples rather than live Vastra, set **`USE_VASTRA_PICKLIST=false`**. It defaults
+to whatever `USE_VASTRA_MODULES` is, so setting it explicitly is what splits the two — the
+point being to test picking against sample challans while Add Item keeps reading live Vastra.
+Both are read at load, so a change needs a restart.
 
 Behaviour worth knowing:
 
@@ -232,7 +289,7 @@ What each page does with them:
 | Item Management | One line per **(module code, item)** pair, not per item — the same product arriving on two documents stays two lines, because that is how the floor tracks it. Manual stock sorts last. Search hits item name, module code or module type. |
 | Rack List | Searches racks by the item names *and* module codes they contain, not only by rack id |
 | Move Item | Variants show their module codes; search matches item, colour, size or code |
-| Picklist | Searches delivery challans by challan no; the generated list resolves each line to its racks by exact `(item, colour, size)` |
+| Picklist | Item / colour / size autocomplete from stock in the racks, because a rack lookup matches them exactly. The generated list resolves each challan line to its racks |
 | Reports | One search box filters every report, matching against all rendered columns |
 | Audit Log | Search covers action, entity, user and the before/after JSON |
 
@@ -255,8 +312,9 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | PATCH | `/api/item-locations/:id` | update qty (0 = remove) |
 | POST | `/api/moves` | atomic move |
 | GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed, inbound modules only. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
-| GET | `/api/picklist/challans?q=&limit=` | delivery challans, grouped one entry per **document** |
-| GET | `/api/picklist/:dcNo` | the picklist — every line with its racks, `available`, `shortage` and a suggested split. Read-only |
+| POST | `/api/picklist/resolve` | `{ dcNo, party, date, lines: [{ item, color, size, qty }] }` → the picklist for a hand-entered challan. Read-only. **The path in use today** |
+| GET | `/api/picklist/challans?q=&limit=` | delivery challans from the module, grouped one entry per **document**. Awaiting the Vastra API |
+| GET | `/api/picklist/:dcNo` | same picklist, built from the module instead of typed lines. Awaiting the Vastra API |
 | POST | `/api/picklist/:dcNo/pick` | `{ picks: [{ itemLocationId, qty }] }` — deducts the stock. Atomic |
 | GET | `/api/audit-log` | history |
 
@@ -341,30 +399,37 @@ curl -s localhost:4000/api/audit-log -H "Authorization: Bearer $T"   # who/when/
 ```
 
 ### Picklist
-Same token. Pick any challan id from the first call.
+Same token. Item/colour/size must match stock exactly — take them from
+`curl -s localhost:4000/api/item-locations -H "Authorization: Bearer $T"`.
 
 ```bash
 T=<token>
 
-# challans, grouped one entry per document
-curl -s localhost:4000/api/picklist/challans -H "Authorization: Bearer $T"
+# a hand-entered challan: one design across a size run. `suggested` fills the
+# largest rack first; `shortage` is > 0 when the challan asks for more than the
+# racks hold, and an item in no rack comes back with no placements at all
+curl -s -X POST localhost:4000/api/picklist/resolve \
+  -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"dcNo":"DC-5044","party":"Janki","lines":[
+        {"item":"Anarkali Kurti","color":"Red","size":"S","qty":2},
+        {"item":"Anarkali Kurti","color":"Red","size":"M","qty":3},
+        {"item":"Anarkali Kurti","color":"Red","size":"L","qty":1}]}'
 
-# the picklist — note `suggested` fills the largest rack first, and `shortage`
-# is > 0 when the challan asks for more than the racks hold
-curl -s localhost:4000/api/picklist/DC-2026-0001 -H "Authorization: Bearer $T"
+# guards — expect 400 on each
+#   no challan number / no lines / every line at qty 0
 
 # generating changed nothing: re-read the racks and compare `used` — identical
 curl -s localhost:4000/api/racks -H "Authorization: Bearer $T"
 
 # over-pick guard — expect 400 AND no partial write (the valid pick in the same
 # request must roll back too)
-curl -s -X POST localhost:4000/api/picklist/DC-2026-0001/pick \
+curl -s -X POST localhost:4000/api/picklist/DC-5044/pick \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"picks":[{"itemLocationId":16,"qty":99999},{"itemLocationId":155,"qty":5}]}'
 
 # the real deduction — rows decrement (deleted at zero), both racks recalc,
 # and the audit rows carry the challan number
-curl -s -X POST localhost:4000/api/picklist/DC-2026-0001/pick \
+curl -s -X POST localhost:4000/api/picklist/DC-5044/pick \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"picks":[{"itemLocationId":16,"qty":10}]}'
 ```

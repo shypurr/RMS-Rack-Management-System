@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { sslConfig } from './src/db.js';
+import { buildChallans, CHALLAN_COLUMNS } from './challanFixtures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB = process.env.DB_NAME || 'rms';
@@ -39,8 +40,6 @@ const MODULES = ['Purchase Inward', 'Job Slip', 'Pack Design', 'Sales Return'];
 const MODULE_PREFIX = { 'Purchase Inward': 'PI', 'Job Slip': 'JS', 'Pack Design': 'PD', 'Sales Return': 'SR' };
 
 // Outbound feed for the Picklist tab (Flow C). Written to source_transaction only.
-const PICK_MODULE = 'Delivery Challan';
-const PICK_PREFIX = 'DC';
 // Stub names for the demo history only. Real rows written through the API carry
 // the logged-in org's vastra_org_id; these just make the "By" column in the
 // audit/movement reports meaningful before anyone has used the app.
@@ -170,36 +169,15 @@ function buildSourceTransactions() {
   return rows;
 }
 
-// Flow C feed. Delivery challans are built FROM the stock that exists so a
-// generated picklist actually resolves to racks. `stock` is empty under
-// --empty, in which case we fall back to the catalogue and every line is short
-// — which is itself a useful state to look at.
-// One challan spans several rows (`DC-2026-0001#1`, `#2`…) because
-// source_transaction.id is the primary key; the route groups on the `#` prefix.
-function buildChallans(stock) {
-  const source = stock.length ? stock : CATALOG.flatMap((c) =>
-    c.colors.slice(0, 2).map((color) => ({ item: c.item, color, size: rnd(c.sizes), qty: 0 }))
-  );
-  const rows = [];
-  for (let n = 1; n <= 14; n++) {
-    const id = `${PICK_PREFIX}-2026-${pad(n, 4)}`;
-    const seen = new Set();
-    const lineCount = rndInt(2, 5);
-    for (let i = 1; i <= lineCount; i++) {
-      const s = rnd(source);
-      const key = `${s.item}|${s.color}|${s.size}`;
-      if (seen.has(key)) continue; // merged by the picklist anyway; keep the data clean
-      seen.add(key);
-      // Usually pickable in full; ~15% deliberately over-asks so the shortage
-      // path has something to render.
-      const qty = s.qty > 1 && !chance(0.15)
-        ? rndInt(1, s.qty)
-        : (s.qty || rndInt(5, 40)) + rndInt(5, 30);
-      rows.push([`${id}#${i}`, PICK_MODULE, s.item, s.color, s.size, qty]);
-    }
-  }
-  return rows;
-}
+// Flow C feed (delivery challans, with size runs) lives in challanFixtures.js
+// — shared with makeChallans.js, which adds challans to a database that already
+// has stock instead of rebuilding everything.
+// Under --empty there is no stock to build them from, so the catalogue stands
+// in and every line comes out short — itself a useful state to look at.
+const challanSourceFromCatalog = () =>
+  CATALOG.flatMap((c) => c.colors.slice(0, 2).flatMap((color) =>
+    c.sizes.map((size) => ({ item: c.item, color, size, qty: 0 }))
+  ));
 
 // Audit trail. Two sources:
 //   1. one `add` per stock row that exists today (backdated to its created_at)
@@ -326,16 +304,14 @@ async function main() {
   console.log(`Seeded ${srcRows.length} source transactions.`);
 
   const insertChallans = async (rows) => {
-    await conn.query(
-      'INSERT INTO source_transaction (id, module_type, item, color, size, qty) VALUES ?',
-      [rows]
-    );
-    console.log(`Seeded ${rows.length} delivery challan lines.`);
+    await conn.query(`INSERT INTO source_transaction ${CHALLAN_COLUMNS} VALUES ?`, [rows]);
+    const docs = new Set(rows.map((r) => r[0].split('#')[0])).size;
+    console.log(`Seeded ${docs} delivery challans (${rows.length} lines).`);
   };
 
   if (EMPTY) {
     // No stock to build challans from — catalogue fallback, every line short.
-    await insertChallans(buildChallans([]));
+    await insertChallans(buildChallans(challanSourceFromCatalog()));
     console.log('--empty: skipping stock and audit history. All racks Vacant.');
     await conn.end();
     return;

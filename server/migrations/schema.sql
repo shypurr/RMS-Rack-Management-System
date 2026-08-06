@@ -65,5 +65,10 @@ CREATE TABLE source_transaction (
   color       VARCHAR(60) NOT NULL DEFAULT '',
   size        VARCHAR(60) NOT NULL DEFAULT '',
   qty         INT NOT NULL,
+  -- Document-level fields, repeated on every line of the same document (the
+  -- live Vastra rows carry them the same way, off the master). Only the
+  -- challan feed reads them; inbound stub rows leave them at their defaults.
+  party       VARCHAR(120) NOT NULL DEFAULT '',
+  doc_date    DATE NULL,
   INDEX idx_src_module (module_type)
 ) ENGINE=InnoDB;

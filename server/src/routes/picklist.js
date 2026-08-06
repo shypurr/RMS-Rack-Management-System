@@ -53,45 +53,84 @@ router.get('/challans', async (req, res, next) => {
 });
 
 // GET /api/picklist/:dcNo — the picklist. Read-only by design.
+// Turn challan lines into picklist rows: merge duplicates, order them the way
+// the challan reads, then resolve each to the racks holding it.
+// Shared by both entry paths — typed by hand today, read off the Vastra module
+// once that API exists — so the two can never drift apart.
+async function resolveLines(rawLines) {
+  // One row per item: a challan may list the same item/color/size twice.
+  const merged = new Map();
+  for (const r of rawLines) {
+    const item = String(r.item || '').trim();
+    if (!item) continue;
+    const color = String(r.color || '').trim();
+    const size = String(r.size || '').trim();
+    const qty = Number(r.qty) || 0;
+    if (qty <= 0) continue;
+    const key = `${item}|${color}|${size}`;
+    const line = merged.get(key) || { item, color, size, qty: 0 };
+    line.qty += qty;
+    merged.set(key, line);
+  }
+
+  // A challan lists one design across a run of sizes, so keep those lines
+  // adjacent — the picklist should read the way the challan does. Numeric
+  // sizes (36, 38, 42) sort numerically, lettered ones alphabetically.
+  const sizeKey = (s) => (/^\d+$/.test(s) ? Number(s) : Infinity);
+  const lines = [...merged.values()].sort((a, b) =>
+    a.item.localeCompare(b.item) ||
+    a.color.localeCompare(b.color) ||
+    sizeKey(a.size) - sizeKey(b.size) ||
+    a.size.localeCompare(b.size)
+  );
+
+  const placed = await Promise.all(
+    // findPlacements already orders qty DESC — exactly the largest-first
+    // order the allocation wants, so no re-sort here.
+    lines.map((l) => findPlacements(pool, { item: l.item, color: l.color, size: l.size }))
+  );
+
+  return lines.map((l, i) => {
+    const placements = placed[i].map((p) => ({ id: p.id, rack_id: p.rack_id, qty: Number(p.qty) }));
+    const available = placements.reduce((s, p) => s + p.qty, 0);
+    return {
+      ...l,
+      available,
+      shortage: Math.max(0, l.qty - available),
+      placements: allocate(placements, l.qty),
+    };
+  });
+}
+
+// POST /api/picklist/resolve — the manual path, and today's only one.
+// The user reads a challan off the Vastra app and types its number and lines in
+// here; RMS answers where each line is stored. Nothing is persisted: the
+// durable record is the audit trail written when the racks are updated.
+router.post('/resolve', async (req, res, next) => {
+  try {
+    const { dcNo, party = '', date = null, lines = [] } = req.body;
+    if (!String(dcNo || '').trim()) throw new HttpError(400, 'A challan number is required');
+    const rows = await resolveLines(lines);
+    if (!rows.length) throw new HttpError(400, 'Add at least one item with a positive quantity');
+    res.json({ dcNo: String(dcNo).trim(), party, date, rows, source: 'manual' });
+  } catch (err) { next(err); }
+});
+
+// GET /api/picklist/:dcNo — the module path. Wired and tested, but Vastra does
+// not serve the Delivery Challan module yet, so nothing calls it in anger.
+// Left in place so switching over is a UI toggle, not a rewrite.
 router.get('/:dcNo', async (req, res, next) => {
   try {
     const dcNo = req.params.dcNo;
-    const rows = (await fetchTransactions(req.org, { moduleType: PICK_MODULE_TYPE, q: dcNo }))
+    const raw = (await fetchTransactions(req.org, { moduleType: PICK_MODULE_TYPE, q: dcNo }))
       .filter((r) => docNo(r.id) === dcNo);
-    if (!rows.length) throw new HttpError(404, `Delivery Challan ${dcNo} not found`);
-
-    // One row per item: a challan may list the same item/color/size twice.
-    const merged = new Map();
-    for (const r of rows) {
-      const key = `${r.item}|${r.color || ''}|${r.size || ''}`;
-      const line = merged.get(key) || { item: r.item, color: r.color || '', size: r.size || '', qty: 0 };
-      line.qty += Number(r.qty) || 0;
-      merged.set(key, line);
-    }
-
-    const lines = [...merged.values()];
-    const placed = await Promise.all(
-      // findPlacements already orders qty DESC — exactly the largest-first
-      // order the allocation wants, so no re-sort here.
-      lines.map((l) => findPlacements(pool, { item: l.item, color: l.color, size: l.size }))
-    );
-
-    const picklist = lines.map((l, i) => {
-      const placements = placed[i].map((p) => ({ id: p.id, rack_id: p.rack_id, qty: Number(p.qty) }));
-      const available = placements.reduce((s, p) => s + p.qty, 0);
-      return {
-        ...l,
-        available,
-        shortage: Math.max(0, l.qty - available),
-        placements: allocate(placements, l.qty),
-      };
-    });
-
+    if (!raw.length) throw new HttpError(404, `Delivery Challan ${dcNo} not found`);
     res.json({
       dcNo,
-      date: rows[0].date ?? null,
-      party: rows[0].party ?? '',
-      rows: picklist,
+      date: raw[0].date ?? null,
+      party: raw[0].party ?? '',
+      rows: await resolveLines(raw),
+      source: 'module',
     });
   } catch (err) { next(err); }
 });

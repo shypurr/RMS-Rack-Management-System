@@ -59,6 +59,8 @@ export const api = {
     if (limit) p.set('limit', String(limit));
     return request(`/picklist/challans?${p.toString()}`);
   },
+  // Manual path: the user types the challan, we answer where its items are.
+  resolvePicklist: (body) => request('/picklist/resolve', { method: 'POST', body }),
   picklist: (dcNo) => request(`/picklist/${encodeURIComponent(dcNo)}`),
   pickItems: (dcNo, picks) =>
     request(`/picklist/${encodeURIComponent(dcNo)}/pick`, { method: 'POST', body: { picks } }),
