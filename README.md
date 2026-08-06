@@ -190,6 +190,16 @@ acted on is exactly where a stock discrepancy hides.
 answer the question, because generating writes no audit row by design. The Audit Log tab
 stays as the raw everything-view.
 
+**Updating racks from History.** A row still showing `rack updated: false` gets an **Update**
+button — the picking happened on the floor, the portal just never caught up. It opens a
+confirm dialog rather than deducting on the spot, because the saved `racks` text is a snapshot
+from generation time and stock may well have moved since. So the lines are **re-resolved
+against stock as it is now** (`GET /api/picklist/:id/resolve`), which naturally spills the
+allocation onto whichever racks currently hold the item. Any line whose racks no longer match
+is called out with `sheet said: …`, since the picker is holding that paper. Confirming runs
+the same `POST /api/picklist/pick` as the main tab and closes the history entry; re-resolving
+an already-updated picklist is refused with **409**.
+
 On the putaway side, `after_json.qty` is the row's total *after* the add, which for a merge
 into existing stock is not what was put away — history reports the difference against
 `before_json` instead, and notes what the rack held afterwards.
@@ -357,6 +367,7 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | GET | `/api/picklist/challans?q=&limit=` | delivery challans from the module, grouped one entry per **document**. Awaiting the Vastra API |
 | GET | `/api/picklist/:dcNo` | same picklist, built from the module instead of typed lines. Awaiting the Vastra API |
 | POST | `/api/picklist/pick` | `{ picks: [{ itemLocationId, qty }], dcNo?, picklistId? }` — deducts the stock. Atomic. `dcNo` rides in the body because manual entry has none; `picklistId` closes the history entry |
+| GET | `/api/picklist/:id/resolve` | re-resolve a stored picklist against current stock (History → Update). **409** if it already updated the racks |
 | GET | `/api/picklist/:id/pdf` | the printable sheet, `application/pdf` (pdfkit, no headless browser) |
 | GET | `/api/history/putaway?limit=` | stock added to racks, newest first (from `audit_log`) |
 | GET | `/api/history/picklists?limit=` | every picklist generated, with `rack_updated` |
@@ -499,6 +510,11 @@ file /tmp/picklist.pdf            # → PDF document
 # putaway history. `qty` is what was ADDED, which for a merge into existing
 # stock differs from the row total in the audit row it came from
 curl -s "localhost:4000/api/history/putaway?limit=5" -H "Authorization: Bearer $T"
+
+# History → Update: re-resolve a stored picklist against stock as it is NOW.
+# Move some of that stock first and `moved: true` plus `printedRacks` should
+# appear on the affected lines. Re-running it after a pick → 409
+curl -s "localhost:4000/api/picklist/1/resolve" -H "Authorization: Bearer $T"
 ```
 
 Delivery Challan must never appear in the inbound feed — this should list four module types

@@ -124,6 +124,34 @@ router.post('/resolve', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/picklist/:id/resolve — re-resolve a STORED picklist against stock as
+// it is right now. Powers "Update" from History: the saved `racks` text is a
+// snapshot from generation time, and stock may well have moved since, so the
+// allocation is recomputed rather than replayed. Read-only.
+router.get('/:id/resolve', async (req, res, next) => {
+  try {
+    const stored = await getPicklist(Number(req.params.id));
+    if (!stored) throw new HttpError(404, 'Picklist not found');
+    if (stored.rack_updated) throw new HttpError(409, 'This picklist has already updated the racks');
+
+    const rows = await resolveLines(stored.lines);
+    // Flag lines whose racks no longer match what the printed sheet said, so
+    // whoever is picking knows the paper is out of date.
+    const wasRacks = new Map(stored.lines.map((l) => [`${l.item}|${l.color}|${l.size}`, l.racks]));
+    const withDrift = rows.map((r) => {
+      const now = r.placements.filter((p) => p.suggested > 0)
+        .map((p) => `${p.rack_id} x${p.suggested}`).join(', ');
+      const before = wasRacks.get(`${r.item}|${r.color}|${r.size}`) ?? '';
+      return { ...r, printedRacks: before, moved: before !== now };
+    });
+
+    res.json({
+      id: stored.id, dcNo: stored.dc_no, party: stored.party,
+      created_at: stored.created_at, rows: withDrift, source: 'stored',
+    });
+  } catch (err) { next(err); }
+});
+
 // GET /api/picklist/:id/pdf — the printable sheet. Streams a real PDF so the
 // browser's own viewer (and its download button) handles it.
 router.get('/:id/pdf', async (req, res, next) => {

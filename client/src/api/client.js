@@ -67,6 +67,9 @@ export const api = {
   pickItems: (dcNo, picks, picklistId = null) =>
     request('/picklist/pick', { method: 'POST', body: { dcNo: dcNo || null, picks, picklistId } }),
 
+  // Re-resolve a stored picklist against current stock (History → Update).
+  reresolvePicklist: (id) => request(`/picklist/${id}/resolve`),
+
   historyPutaway: (limit = 100) => request(`/history/putaway?limit=${limit}`),
   historyPicklists: (limit = 100) => request(`/history/picklists?limit=${limit}`),
 
