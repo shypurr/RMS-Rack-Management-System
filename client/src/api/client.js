@@ -62,8 +62,9 @@ export const api = {
   // Manual path: the user types the challan, we answer where its items are.
   resolvePicklist: (body) => request('/picklist/resolve', { method: 'POST', body }),
   picklist: (dcNo) => request(`/picklist/${encodeURIComponent(dcNo)}`),
+  // dcNo is optional — manual entry has none, it only exists on the module path.
   pickItems: (dcNo, picks) =>
-    request(`/picklist/${encodeURIComponent(dcNo)}/pick`, { method: 'POST', body: { picks } }),
+    request('/picklist/pick', { method: 'POST', body: { dcNo: dcNo || null, picks } }),
 
   auditLog: (action) => request(`/audit-log${action ? `?action=${encodeURIComponent(action)}` : ''}`),
 

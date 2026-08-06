@@ -13,16 +13,22 @@ import { useToast } from '../components/Toast.jsx';
 // Two deliberate steps either way. "Generate Picklist" only READS. "Update
 // Rack" is the one that deducts, and only what is in the qty boxes.
 
-const EMPTY_DRAFT = { item: '', color: '', sizeQty: {}, freeSize: '', freeQty: '' };
+// One draft = one line on the challan: a design, in one colour, across a run of
+// sizes. Same design in another colour is a second line, exactly as the challan
+// prints it. `sizeQty` holds quantities against sizes that are in stock;
+// `extra` is for sizes that aren't (they'll report as short).
+const EMPTY_DRAFT = { item: '', color: '', sizeQty: {}, extra: [] };
 
 export default function Picklist() {
   const toast = useToast();
   const [mode, setMode] = useState('manual'); // 'manual' | 'module'
 
-  // Challan header + the lines making it up.
+  // The challan is not recreated here — it already exists in the Vastra app.
+  // Manual entry is only its item details, transcribed to find the racks. The
+  // challan header (no / party / date) is therefore module-tab only, where it
+  // comes back from Vastra for free.
   const [dcNo, setDcNo] = useState('');
   const [party, setParty] = useState('');
-  const [date, setDate] = useState('');
   const [lines, setLines] = useState([]);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
@@ -50,6 +56,11 @@ export default function Picklist() {
   }, [stock]);
 
   const itemNames = useMemo(() => [...catalog.keys()].sort(), [catalog]);
+  const itemStats = useMemo(() => {
+    const m = new Map();
+    for (const r of stock) m.set(r.item, (m.get(r.item) || 0) + Number(r.qty || 0));
+    return m;
+  }, [stock]);
   const draftColors = useMemo(
     () => [...(catalog.get(draft.item)?.keys() ?? [])].sort(),
     [catalog, draft.item]
@@ -64,25 +75,29 @@ export default function Picklist() {
   const editLines = (next) => { setLines(next); clearPicklist(); };
 
   const addDraft = () => {
-    if (!draft.item.trim()) return toast('Pick an item first', 'warning');
-    const added = draftSizes.length
-      ? draftSizes
-          .map(([size]) => ({ size, qty: Number(draft.sizeQty[size]) || 0 }))
-          .filter((s) => s.qty > 0)
-          .map((s) => ({ item: draft.item.trim(), color: draft.color, size: s.size, qty: s.qty }))
-      : [{ item: draft.item.trim(), color: draft.color.trim(), size: draft.freeSize.trim(), qty: Number(draft.freeQty) || 0 }]
-          .filter((l) => l.qty > 0);
+    const item = draft.item.trim();
+    if (!item) return toast('Pick an item first', 'warning');
+
+    // The size run plus any off-catalogue sizes typed underneath it.
+    const fromRun = draftSizes.map(([size]) => ({ size, qty: Number(draft.sizeQty[size]) || 0 }));
+    const fromExtra = draft.extra.map((e) => ({ size: e.size.trim(), qty: Number(e.qty) || 0 }));
+    const added = [...fromRun, ...fromExtra]
+      .filter((s) => s.qty > 0)
+      .map((s) => ({ item, color: draft.color.trim(), size: s.size, qty: s.qty }));
 
     if (!added.length) return toast('Enter a quantity against at least one size', 'warning');
     editLines([...lines, ...added]);
     setDraft(EMPTY_DRAFT);
   };
 
+  const setExtra = (i, patch) =>
+    setDraft({ ...draft, extra: draft.extra.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
+
   const generate = async (dc = dcNo) => {
     setLoading(true);
     try {
       const res = mode === 'manual'
-        ? await api.resolvePicklist({ dcNo: dc, party, date: date || null, lines })
+        ? await api.resolvePicklist({ lines })
         : await api.picklist(dc);
       setDetail(res);
       // Seed the boxes from the server's largest-rack-first suggestion.
@@ -112,7 +127,7 @@ export default function Picklist() {
     setSaving(true);
     try {
       const res = await api.pickItems(detail.dcNo, picks);
-      toast(`${res.pickedQty} units picked for ${detail.dcNo} across ${res.racks.length} rack(s)`, 'success');
+      toast(`${res.pickedQty} units picked${detail.dcNo ? ` for ${detail.dcNo}` : ''} across ${res.racks.length} rack(s)`, 'success');
       const short = detail.rows.filter((r) => r.shortage > 0);
       if (short.length) {
         toast(`${short.length} line(s) still short: ${short.map((r) => r.item).join(', ')}`, 'warning');
@@ -126,6 +141,23 @@ export default function Picklist() {
     }
   };
 
+  // The flat `lines` are what the API takes, but a challan reads as one entry
+  // per design+colour with its sizes beside it — so group for display.
+  const blocks = useMemo(() => {
+    const m = new Map();
+    for (const l of lines) {
+      const key = `${l.item}|${l.color}`;
+      const b = m.get(key) || { key, item: l.item, color: l.color, sizes: [], total: 0 };
+      b.sizes.push({ size: l.size, qty: l.qty });
+      b.total += l.qty;
+      m.set(key, b);
+    }
+    for (const b of m.values()) {
+      b.sizes.sort((a, z) => sizeKey(a.size) - sizeKey(z.size) || a.size.localeCompare(z.size));
+    }
+    return [...m.values()];
+  }, [lines]);
+
   const lineTotal = lines.reduce((s, l) => s + l.qty, 0);
   const totals = detail
     ? detail.rows.reduce(
@@ -133,11 +165,11 @@ export default function Picklist() {
         { qty: 0, available: 0, short: 0 }
       )
     : null;
-  const canGenerate = mode === 'manual' ? !!dcNo.trim() && lines.length > 0 : !!dcNo.trim();
+  const canGenerate = mode === 'manual' ? lines.length > 0 : !!dcNo.trim();
 
   const switchMode = (m) => {
     setMode(m);
-    setDcNo(''); setParty(''); setDate('');
+    setDcNo(''); setParty('');
     setLines([]); setDraft(EMPTY_DRAFT);
     clearPicklist();
   };
@@ -163,20 +195,7 @@ export default function Picklist() {
                 <div className={`tab-btn ${mode === 'module' ? 'active' : ''}`} onClick={() => switchMode('module')}>From Vastra Module</div>
               </div>
 
-              {mode === 'manual' && (
-                <>
-                  <div className="grid cols-3 gap-col-4">
-                    <Field label="Challan No" required value={dcNo} placeholder="e.g. DC-5044"
-                      onChange={(v) => { setDcNo(v); clearPicklist(); }} />
-                    <Field label="Party" value={party} placeholder="optional" onChange={setParty} />
-                    <Field label="Date" type="date" value={date} onChange={setDate} />
-                  </div>
-                  <p className="text-xs text-muted">
-                    Read these off the challan in the Vastra app. The Delivery Challan API isn&apos;t available
-                    yet — once it is, the other tab fills this in automatically.
-                  </p>
-                </>
-              )}
+              {mode === 'manual' && <p className="text-muted text-sm">Enter item details directly below.</p>}
 
               {mode === 'module' && (
                 <div className="form-group" style={{ marginBottom: 0 }}>
@@ -196,91 +215,39 @@ export default function Picklist() {
           {mode === 'manual' && (
             <div className="card mb-4">
               <div className="card-header"><span className="card-title"><i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — Items on the Challan</span></div>
-              <div className="card-body">
-                <div className="grid cols-2 gap-col-4">
-                  <div className="form-group">
-                    <label className="form-label">Item / Design <span className="required">*</span></label>
-                    <input className="form-control" list="pick-items" placeholder="Start typing an item name…"
-                      value={draft.item}
-                      onChange={(e) => setDraft({ ...EMPTY_DRAFT, item: e.target.value })} />
-                    <datalist id="pick-items">
-                      {itemNames.map((n) => <option key={n} value={n} />)}
-                    </datalist>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Color</label>
-                    {draftColors.length > 0 ? (
-                      <select className="form-control" value={draft.color}
-                        onChange={(e) => setDraft({ ...draft, color: e.target.value, sizeQty: {} })}>
-                        <option value="">Select a color…</option>
-                        {draftColors.map((c) => <option key={c} value={c}>{c || '(no color)'}</option>)}
-                      </select>
-                    ) : (
-                      <input className="form-control" placeholder="Color" value={draft.color}
-                        onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
-                    )}
-                  </div>
-                </div>
-
-                {/* The size run — the shape a challan actually takes */}
-                {draftSizes.length > 0 && (
-                  <>
-                    <label className="form-label">Quantity per size</label>
-                    <div className="size-run mb-3">
-                      {draftSizes.map(([size, have]) => (
-                        <div key={size} className="size-cell">
-                          <div className="size-cell-label">{size || '(no size)'}</div>
-                          <input className="form-control" type="number" min="0" placeholder="0"
-                            value={draft.sizeQty[size] ?? ''}
-                            onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
-                          <div className="size-cell-stock">{have} in stock</div>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {/* Nothing in stock matches — take it anyway, it'll flag as short */}
-                {draft.item && draftSizes.length === 0 && (
-                  <div className="grid cols-2 gap-col-4">
-                    <Field label="Size" value={draft.freeSize} onChange={(v) => setDraft({ ...draft, freeSize: v })} />
-                    <Field label="Quantity" type="number" value={draft.freeQty} onChange={(v) => setDraft({ ...draft, freeQty: v })} />
-                  </div>
-                )}
-                {draft.item && draftSizes.length === 0 && !catalog.has(draft.item) && (
-                  <p className="text-xs text-danger mb-3">
-                    <i className="fa-solid fa-triangle-exclamation" />&nbsp;
-                    &ldquo;{draft.item}&rdquo; isn&apos;t in any rack — it can go on the challan but will show as short.
-                  </p>
-                )}
-
-                <button className="btn btn-outline" onClick={addDraft} disabled={!draft.item}>
-                  <i className="fa-solid fa-plus" /> Add to challan
-                </button>
-
-                {lines.length > 0 && (
-                  <div className="data-table-wrap mt-4">
+              <div className="card-body" style={{ overflow: 'visible' }}>
+                {/* Items already on the challan — one block per design+colour,
+                    numbered like the challan's Sr column. */}
+                {blocks.length > 0 && (
+                  <div className="data-table-wrap mb-4">
                     <table className="data-table">
                       <thead>
-                        <tr><th>Item / Design</th><th>Color</th><th>Size</th><th>Qty</th><th /></tr>
+                        <tr><th style={{ width: 40 }}>Sr</th><th>Item / Design</th><th>Color</th><th>Sizes</th><th>Qty</th><th /></tr>
                       </thead>
                       <tbody>
-                        {lines.map((l, i) => (
-                          <tr key={`${l.item}|${l.color}|${l.size}|${i}`}>
-                            <td className="font-600">{l.item}</td>
-                            <td>{l.color || '—'}</td>
-                            <td>{l.size || '—'}</td>
-                            <td>{l.qty}</td>
+                        {blocks.map((b, i) => (
+                          <tr key={b.key}>
+                            <td className="text-muted">{i + 1}</td>
+                            <td className="font-600">{b.item}</td>
+                            <td>{b.color || '—'}</td>
+                            <td>
+                              {b.sizes.map((s) => (
+                                <span key={s.size} className="badge badge-ghost size-chip">
+                                  {s.size || 'no size'} ×{s.qty}
+                                </span>
+                              ))}
+                            </td>
+                            <td className="font-600">{b.total}</td>
                             <td style={{ textAlign: 'right' }}>
-                              <button className="btn btn-ghost btn-sm" title="Remove line"
-                                onClick={() => editLines(lines.filter((_, j) => j !== i))}>
+                              <button className="btn btn-ghost btn-sm" title="Remove this item"
+                                onClick={() => editLines(lines.filter((l) => `${l.item}|${l.color}` !== b.key))}>
                                 <i className="fa-solid fa-xmark" />
                               </button>
                             </td>
                           </tr>
                         ))}
                         <tr>
-                          <td className="font-700" colSpan={3}>Total</td>
+                          <td colSpan={4} className="font-700">Total</td>
                           <td className="font-700">{lineTotal}</td>
                           <td />
                         </tr>
@@ -288,6 +255,97 @@ export default function Picklist() {
                     </table>
                   </div>
                 )}
+
+                <div className="add-item-panel">
+                  <div className="text-sm font-700 mb-3">
+                    Item {blocks.length + 1}
+                    {blocks.length > 0 && <span className="text-muted font-600">&nbsp;— same design in another colour goes in as its own item</span>}
+                  </div>
+
+                  <div className="grid cols-2 gap-col-4">
+                    <div className="form-group">
+                      <label className="form-label">Item / Design <span className="required">*</span></label>
+                      <ItemCombobox
+                        value={draft.item}
+                        items={itemNames}
+                        stats={itemStats}
+                        onChange={(v) => setDraft({ ...EMPTY_DRAFT, item: v })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Color</label>
+                      {draftColors.length > 0 ? (
+                        <select className="form-control" value={draft.color}
+                          onChange={(e) => setDraft({ ...draft, color: e.target.value, sizeQty: {} })}>
+                          <option value="">Select a color…</option>
+                          {draftColors.map((c) => <option key={c} value={c}>{c || '(no color)'}</option>)}
+                        </select>
+                      ) : (
+                        <input className="form-control" placeholder="Color" value={draft.color}
+                          onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* The size run — one design across a row of sizes, the shape
+                      the challan itself uses. */}
+                  {draftSizes.length > 0 && (
+                    <div className="form-group">
+                      <label className="form-label">Quantity per size</label>
+                      <div className="size-run">
+                        {draftSizes.map(([size, have]) => (
+                          <div key={size} className="size-cell">
+                            <div className="size-cell-label">{size || 'no size'}</div>
+                            <input className="form-control" type="number" min="0" placeholder="0"
+                              value={draft.sizeQty[size] ?? ''}
+                              onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
+                            <div className="size-cell-stock">{have} in stock</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {draft.item && !draft.color && draftColors.length > 0 && (
+                    <p className="text-xs text-muted mb-3">Pick a colour to see its size run.</p>
+                  )}
+
+                  {/* Sizes the warehouse doesn't stock — allowed, they report short */}
+                  {draft.extra.map((e, i) => (
+                    <div key={i} className="grid cols-2 gap-col-4">
+                      <Field label={i === 0 ? 'Size (not in stock)' : ''} value={e.size}
+                        onChange={(v) => setExtra(i, { size: v })} />
+                      <div className="flex gap-2 items-center">
+                        <div style={{ flex: 1 }}>
+                          <Field label={i === 0 ? 'Quantity' : ''} type="number" value={e.qty}
+                            onChange={(v) => setExtra(i, { qty: v })} />
+                        </div>
+                        <button className="btn btn-ghost btn-sm" title="Remove size"
+                          style={{ marginTop: i === 0 ? 18 : 0 }}
+                          onClick={() => setDraft({ ...draft, extra: draft.extra.filter((_, j) => j !== i) })}>
+                          <i className="fa-solid fa-xmark" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {draft.item && !catalog.has(draft.item) && (
+                    <p className="text-xs text-danger mb-3">
+                      <i className="fa-solid fa-triangle-exclamation" />&nbsp;
+                      &ldquo;{draft.item}&rdquo; isn&apos;t in any rack. It can still go on the challan, but it will show as short.
+                    </p>
+                  )}
+
+                  <div className="flex gap-3 items-center">
+                    <button className="btn btn-primary" onClick={addDraft} disabled={!draft.item}>
+                      <i className="fa-solid fa-plus" /> Add item
+                    </button>
+                    <button className="btn btn-ghost btn-sm"
+                      onClick={() => setDraft({ ...draft, extra: [...draft.extra, { size: '', qty: '' }] })}>
+                      <i className="fa-solid fa-plus" /> Add a size not in stock
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -303,10 +361,16 @@ export default function Picklist() {
           <div className="card">
             <div className="card-header"><span className="card-title">Summary</span></div>
             <div className="card-body">
-              <SummaryRow label="Challan No" value={dcNo || '—'} />
-              <SummaryRow label="Party" value={party || '—'} />
-              <SummaryRow label="Date" value={date || '—'} />
-              <hr className="divider" />
+              {/* Only the module tab knows a challan number — manual entry is
+                  item details only, so there is nothing to show here. */}
+              {mode === 'module' && (
+                <>
+                  <SummaryRow label="Challan No" value={dcNo || '—'} />
+                  <SummaryRow label="Party" value={party || '—'} />
+                  <hr className="divider" />
+                </>
+              )}
+              <SummaryRow label="Items" value={blocks.length || '—'} />
               <SummaryRow label="Lines" value={detail ? detail.rows.length : lines.length || '—'} />
               <SummaryRow label="Total qty" value={totals ? totals.qty : lineTotal || '—'} />
               <SummaryRow label="In racks" value={totals ? totals.available : '—'} />
@@ -321,7 +385,7 @@ export default function Picklist() {
         {detail && (
           <div className="card" style={{ gridColumn: '1 / -1' }}>
             <div className="card-header">
-              <span className="card-title"><i className="fa-solid fa-clipboard-list text-primary-color" />&nbsp; Picklist — {detail.dcNo}</span>
+              <span className="card-title"><i className="fa-solid fa-clipboard-list text-primary-color" />&nbsp; Picklist{detail.dcNo ? ` — ${detail.dcNo}` : ''}</span>
               <span className="badge badge-primary">{totalPicked} of {totals.qty} allocated</span>
             </div>
             <div className="card-body">
@@ -400,6 +464,43 @@ function clamp(v, max) {
   return Math.min(n, max);
 }
 
+// Item picker over what is actually in the racks. A plain <datalist> wasn't
+// enough: it only resolves on an exact full-string match, so typing "Dupatta"
+// left "Chiffon Dupatta" unreachable and the size run never appeared. This
+// matches on any substring and fills in the stored name when you pick one.
+// Free text is still allowed — the caller warns and lets it through.
+function ItemCombobox({ value, items, stats, onChange }) {
+  const [open, setOpen] = useState(false);
+  const blurTimer = useRef(null);
+
+  const q = value.trim().toLowerCase();
+  const matches = items.filter((n) => n.toLowerCase().includes(q)).slice(0, 8);
+  const exact = items.some((n) => n === value);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        className="form-control"
+        placeholder="Start typing an item name…"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
+        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
+      />
+      {open && matches.length > 0 && !exact && (
+        <div className="txn-dropdown">
+          {matches.map((n) => (
+            <div key={n} className="txn-option" onMouseDown={() => { onChange(n); setOpen(false); }}>
+              <span className="font-600 text-primary-color">{n}</span>
+              <span className="text-sm text-muted">&nbsp; {stats.get(n) ?? 0} in stock</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Searchable challan picker for the module tab: open (empty) shows the latest
 // 10; typing searches all of them. Same UX as AddItem's TxnCombobox.
 function DcCombobox({ onSelect, onClear }) {
@@ -466,10 +567,12 @@ function DcCombobox({ onSelect, onClear }) {
   );
 }
 
+// An empty label is meaningful here: repeated rows drop the heading rather than
+// reserving blank space for it.
 function Field({ label, value, onChange, type = 'text', required, placeholder }) {
   return (
     <div className="form-group">
-      <label className="form-label">{label} {required && <span className="required">*</span>}</label>
+      {label && <label className="form-label">{label} {required && <span className="required">*</span>}</label>}
       <input className="form-control" type={type} value={value} placeholder={placeholder}
         min={type === 'number' ? 0 : undefined}
         onChange={(e) => onChange(e.target.value)} />

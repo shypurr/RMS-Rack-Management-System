@@ -103,16 +103,16 @@ async function resolveLines(rawLines) {
 }
 
 // POST /api/picklist/resolve — the manual path, and today's only one.
-// The user reads a challan off the Vastra app and types its number and lines in
-// here; RMS answers where each line is stored. Nothing is persisted: the
-// durable record is the audit trail written when the racks are updated.
+// The challan itself is NOT recreated here: it already exists in the Vastra
+// app. The user transcribes its item details and RMS answers where each line is
+// stored. So there is no challan number to supply — `dcNo` stays optional for
+// the module tab, which gets one from Vastra for free.
 router.post('/resolve', async (req, res, next) => {
   try {
-    const { dcNo, party = '', date = null, lines = [] } = req.body;
-    if (!String(dcNo || '').trim()) throw new HttpError(400, 'A challan number is required');
+    const { dcNo = null, party = '', date = null, lines = [] } = req.body;
     const rows = await resolveLines(lines);
     if (!rows.length) throw new HttpError(400, 'Add at least one item with a positive quantity');
-    res.json({ dcNo: String(dcNo).trim(), party, date, rows, source: 'manual' });
+    res.json({ dcNo: dcNo ? String(dcNo).trim() : null, party, date, rows, source: 'manual' });
   } catch (err) { next(err); }
 });
 
@@ -135,13 +135,15 @@ router.get('/:dcNo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/picklist/:dcNo/pick — deduct the picked quantities. All-or-nothing.
-router.post('/:dcNo/pick', async (req, res, next) => {
+// POST /api/picklist/pick — deduct the picked quantities. All-or-nothing.
+// `dcNo` rides in the body rather than the path because manual entry has no
+// challan number to put there; when present it lands in the audit trail.
+router.post('/pick', async (req, res, next) => {
   try {
     const picks = (req.body.picks || []).filter((p) => Number(p.qty) > 0);
     if (!picks.length) throw new HttpError(400, 'Nothing to pick');
     const result = await pickItems({
-      picks, dcNo: req.params.dcNo, userId: req.org.vastra_org_id,
+      picks, dcNo: req.body.dcNo || null, userId: req.org.vastra_org_id,
     });
     res.json(result);
   } catch (err) { next(err); }

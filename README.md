@@ -135,29 +135,32 @@ asking for `moduleType=5` before Vastra had it.
 The outbound counterpart of Add Item. Work through a Delivery Challan and RMS answers **which
 rack** each item on it is sitting in — then deducts the stock once the picker confirms.
 
-> **Vastra does not serve the Delivery Challan module yet.** So the challan is entered by hand:
-> the user generates it in the Vastra app, then types its number and lines here. The
-> module-driven path is built and wired behind the *From Vastra Module* tab — when the API
-> lands, switching over is a UI toggle, not a rewrite. Both tabs feed the same resolver
-> (`resolveLines()` in `routes/picklist.js`), so they cannot drift apart.
+> **Vastra does not serve the Delivery Challan module yet.** So the challan's items are entered
+> by hand: the user generates the challan in the Vastra app, then transcribes its item details
+> here to find the racks. The module-driven path is built and wired behind the *From Vastra
+> Module* tab — when the API lands, switching over is a UI toggle, not a rewrite. Both tabs
+> feed the same resolver (`resolveLines()` in `routes/picklist.js`), so they cannot drift apart.
 
-1. **Enter the challan.** Challan number (required), party and date (optional). Then add its
-   items. **Size runs are the point here** — pick a design once and fill in a quantity per
-   size, the way the challan is laid out.
+1. **Enter the items.** The challan is *not* recreated here — it already exists in the Vastra
+   app, so there is no number, party or date to fill in. Only its item details are
+   transcribed, and only so the racks can be found. **Size runs are the point** — pick a
+   design once and fill in a quantity per size, the way the challan is laid out. The same
+   design in another colour is added as its own item, exactly as the challan prints it.
 2. **Generate Picklist.** Builds the table — item, colour, size, quantity, and every rack
    holding that item. Lines repeated on one challan are merged into a single row.
    **This step is read-only; it never touches stock.**
 3. **Update Rack.** Deducts the quantities in the per-rack boxes. Boxes are pre-filled
    largest-rack-first until the line is covered, and the picker can override them.
 
-Manual entry is backed by the stock actually in the racks: the item field autocompletes from
-it, colour narrows to that item's colours, and the size run shows each size with how much is
-on hand. A rack lookup matches `(item, colour, size)` **exactly**, so free-typing a name that
-doesn't exist would silently find nothing — the form warns instead, and the line still goes on
-the challan and reports as short.
+Manual entry is backed by the stock actually in the racks: the item field matches on any
+substring (typing `Dupatta` finds `Chiffon Dupatta`) and fills in the stored name, colour
+narrows to that item's colours, and the size run shows each size with how much is on hand. A
+rack lookup matches `(item, colour, size)` **exactly**, so a name that doesn't resolve would
+silently find nothing — the form warns instead, and the line still goes on the list and
+reports as short. `+ Add a size not in stock` covers sizes the warehouse doesn't carry.
 
-Nothing about a manually entered challan is persisted. The durable record is the audit trail
-written when the racks are updated, which carries the challan number.
+Nothing entered is persisted. The durable record is the audit trail written when the racks
+are updated.
 
 **Size runs.** A real challan lists one design once and spreads it across a row of sizes:
 
@@ -205,8 +208,10 @@ Behaviour worth knowing:
 - **Atomic** — the whole picklist is one transaction. If any line over-picks, the request is
   **400** and nothing at all is written. Rows are locked in ascending id order so two
   concurrent picklists queue instead of deadlocking.
-- **Audit** — each picked row writes `remove` (row emptied) or `update` (partial) with the
-  challan number in `after_json`, so the Audit Log explains why the stock left.
+- **Audit** — each picked row writes `remove` (row emptied) or `update` (partial). Those two
+  actions also mean "someone edited a quantity by hand", so `after_json` carries
+  `source: 'picklist'` to tell them apart, plus `picklist: <challan no>` when one is known
+  (module tab only — manual entry transcribes a challan's items, not its number).
 
 `item_location.module_type` intentionally has **no** `Delivery Challan` member — a challan
 removes stock, it never becomes the provenance of stored stock. The `source_transaction` stub
@@ -312,10 +317,10 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | PATCH | `/api/item-locations/:id` | update qty (0 = remove) |
 | POST | `/api/moves` | atomic move |
 | GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed, inbound modules only. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
-| POST | `/api/picklist/resolve` | `{ dcNo, party, date, lines: [{ item, color, size, qty }] }` → the picklist for a hand-entered challan. Read-only. **The path in use today** |
+| POST | `/api/picklist/resolve` | `{ lines: [{ item, color, size, qty }] }` → where each line is stored. Read-only. **The path in use today.** `dcNo` / `party` / `date` are optional and only the module tab supplies them |
 | GET | `/api/picklist/challans?q=&limit=` | delivery challans from the module, grouped one entry per **document**. Awaiting the Vastra API |
 | GET | `/api/picklist/:dcNo` | same picklist, built from the module instead of typed lines. Awaiting the Vastra API |
-| POST | `/api/picklist/:dcNo/pick` | `{ picks: [{ itemLocationId, qty }] }` — deducts the stock. Atomic |
+| POST | `/api/picklist/pick` | `{ picks: [{ itemLocationId, qty }], dcNo? }` — deducts the stock. Atomic. `dcNo` rides in the body because manual entry has none |
 | GET | `/api/audit-log` | history |
 
 ## Verify (matches plan)
@@ -405,31 +410,30 @@ Same token. Item/colour/size must match stock exactly — take them from
 ```bash
 T=<token>
 
-# a hand-entered challan: one design across a size run. `suggested` fills the
-# largest rack first; `shortage` is > 0 when the challan asks for more than the
+# a challan's items, typed in: one design across a size run. `suggested` fills
+# the largest rack first; `shortage` is > 0 when more is asked for than the
 # racks hold, and an item in no rack comes back with no placements at all
 curl -s -X POST localhost:4000/api/picklist/resolve \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
-  -d '{"dcNo":"DC-5044","party":"Janki","lines":[
+  -d '{"lines":[
         {"item":"Anarkali Kurti","color":"Red","size":"S","qty":2},
         {"item":"Anarkali Kurti","color":"Red","size":"M","qty":3},
         {"item":"Anarkali Kurti","color":"Red","size":"L","qty":1}]}'
 
-# guards — expect 400 on each
-#   no challan number / no lines / every line at qty 0
+# guard — expect 400: no lines, or every line at qty 0
 
 # generating changed nothing: re-read the racks and compare `used` — identical
 curl -s localhost:4000/api/racks -H "Authorization: Bearer $T"
 
 # over-pick guard — expect 400 AND no partial write (the valid pick in the same
 # request must roll back too)
-curl -s -X POST localhost:4000/api/picklist/DC-5044/pick \
+curl -s -X POST localhost:4000/api/picklist/pick \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"picks":[{"itemLocationId":16,"qty":99999},{"itemLocationId":155,"qty":5}]}'
 
 # the real deduction — rows decrement (deleted at zero), both racks recalc,
-# and the audit rows carry the challan number
-curl -s -X POST localhost:4000/api/picklist/DC-5044/pick \
+# and the audit rows carry source:'picklist'
+curl -s -X POST localhost:4000/api/picklist/pick \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"picks":[{"itemLocationId":16,"qty":10}]}'
 ```

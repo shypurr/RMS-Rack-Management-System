@@ -203,14 +203,17 @@ export async function pickItems({ picks, dcNo, userId = 'system' }) {
       rackIds.add(before.fk_rack_id);
       totalQty += qty;
       // `remove` when the row empties, `update` when it survives — both already
-      // in the audit_log.action ENUM. after_json carries the challan so the
-      // Audit Log shows WHY the stock left.
+      // in the audit_log.action ENUM, and both also mean "someone edited a
+      // quantity by hand". `source: 'picklist'` is what separates the two, so
+      // the Audit Log still shows WHY the stock left even when there is no
+      // challan number (manual entry transcribes a challan's items, not its
+      // number). `picklist` is added only when one is actually known.
+      const after = { source: 'picklist', pickedQty: qty, remainingQty: remaining, rack: before.fk_rack_id };
+      if (dcNo) after.picklist = dcNo;
       await writeAudit(conn, {
         entityType: 'item_location', entityId: id,
         action: remaining === 0 ? 'remove' : 'update',
-        before,
-        after: { picklist: dcNo, pickedQty: qty, remainingQty: remaining, rack: before.fk_rack_id },
-        userId,
+        before, after, userId,
       });
     }
 

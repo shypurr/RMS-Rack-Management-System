@@ -437,6 +437,16 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .data-table tbody tr:hover { background: var(--primary-alpha); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
+/* The "add another item" form, set off from the items already on the challan
+   so it reads as a separate act rather than another row of the table. */
+.add-item-panel {
+  padding: 16px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.size-chip { margin: 0 4px 4px 0; }
+
 /* Size run: a challan lists one design across a row of sizes (36 38 42 44 46 L),
    so the entry form mirrors that — a labelled cell per size, wrapping on narrow
    screens rather than scrolling. */
