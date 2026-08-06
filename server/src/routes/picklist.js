@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { findPlacements, pickItems, HttpError } from '../services/rackService.js';
 import { fetchTransactions } from '../services/sourceModules.js';
+import { savePicklist, markRackUpdated, getPicklist } from '../services/picklistStore.js';
+import { renderPicklistPdf } from '../services/picklistPdf.js';
 import { PICK_MODULE_TYPE } from '../vastraClient.js';
 
 const router = Router();
@@ -109,10 +111,30 @@ async function resolveLines(rawLines) {
 // the module tab, which gets one from Vastra for free.
 router.post('/resolve', async (req, res, next) => {
   try {
-    const { dcNo = null, party = '', date = null, lines = [] } = req.body;
+    const { dcNo = null, party = '', date = null, lines = [], picklistId = null } = req.body;
     const rows = await resolveLines(lines);
     if (!rows.length) throw new HttpError(400, 'Add at least one item with a positive quantity');
-    res.json({ dcNo: dcNo ? String(dcNo).trim() : null, party, date, rows, source: 'manual' });
+    // Generating still changes no stock, but it does leave a history entry —
+    // that trace is what makes "generated and never acted on" visible later.
+    // `picklistId` lets a regenerate update the same entry instead of piling up.
+    const id = await savePicklist({
+      id: picklistId, dcNo, party, source: 'manual', rows, userId: req.org.vastra_org_id,
+    });
+    res.json({ id, dcNo: dcNo ? String(dcNo).trim() : null, party, date, rows, source: 'manual' });
+  } catch (err) { next(err); }
+});
+
+// GET /api/picklist/:id/pdf — the printable sheet. Streams a real PDF so the
+// browser's own viewer (and its download button) handles it.
+router.get('/:id/pdf', async (req, res, next) => {
+  try {
+    const picklist = await getPicklist(Number(req.params.id));
+    if (!picklist) throw new HttpError(404, 'Picklist not found');
+    const name = picklist.dc_no ? `picklist-${picklist.dc_no}` : `picklist-${picklist.id}`;
+    res.setHeader('Content-Type', 'application/pdf');
+    // `inline` so it opens in the tab rather than downloading straight away.
+    res.setHeader('Content-Disposition', `inline; filename="${name.replace(/[^\w.-]/g, '_')}.pdf"`);
+    renderPicklistPdf(picklist, req.org.name, res);
   } catch (err) { next(err); }
 });
 
@@ -145,6 +167,9 @@ router.post('/pick', async (req, res, next) => {
     const result = await pickItems({
       picks, dcNo: req.body.dcNo || null, userId: req.org.vastra_org_id,
     });
+    // Close the history entry. After the stock has moved, so a failed pick
+    // never leaves a picklist marked as acted on.
+    await markRackUpdated(req.body.picklistId, result.pickedQty);
     res.json(result);
   } catch (err) { next(err); }
 });

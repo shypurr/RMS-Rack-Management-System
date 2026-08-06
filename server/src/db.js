@@ -60,13 +60,19 @@ export async function pingDb() {
   }
 }
 
-// Apply migrations/auth.sql. All CREATE TABLE IF NOT EXISTS, so it is safe to
-// run on every boot — and it lives outside schema.sql, which seed.js drops and
-// recreates. The pool is not multipleStatements, so split on ';'.
+// Apply the migrations that live OUTSIDE schema.sql, which seed.js drops and
+// recreates: auth (a demo reseed must never delete a login) and picklist
+// history (operational record, not demo data). All CREATE TABLE IF NOT EXISTS,
+// so this is safe on every boot and brings an existing database up to date
+// without a reseed. The pool is not multipleStatements, so split on ';'.
+const STANDING_MIGRATIONS = ['auth.sql', 'picklist.sql'];
+
 export async function applyAuthSchema() {
-  const sql = await readFile(new URL('../migrations/auth.sql', import.meta.url), 'utf8');
-  for (const stmt of sql.split(';')) {
-    if (stmt.trim()) await pool.query(stmt);
+  for (const file of STANDING_MIGRATIONS) {
+    const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
+    for (const stmt of sql.split(';')) {
+      if (stmt.trim()) await pool.query(stmt);
+    }
   }
 }
 

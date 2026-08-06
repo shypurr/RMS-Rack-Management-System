@@ -11,6 +11,7 @@ import itemLocations from './routes/itemLocations.js';
 import moves from './routes/moves.js';
 import sourceTransactions from './routes/sourceTransactions.js';
 import picklist from './routes/picklist.js';
+import history from './routes/history.js';
 import auditLog from './routes/audit.js';
 import dashboard from './routes/dashboard.js';
 
@@ -44,6 +45,7 @@ export function createApp() {
   app.use('/api/moves', requireAuth, moves);
   app.use('/api/source-transactions', requireAuth, sourceTransactions);
   app.use('/api/picklist', requireAuth, picklist);
+  app.use('/api/history', requireAuth, history);
   app.use('/api/audit-log', requireAuth, auditLog);
 
   // In production serve the built React client from the same origin (so the

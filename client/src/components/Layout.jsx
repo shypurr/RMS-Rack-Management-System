@@ -12,6 +12,7 @@ const NAV = [
   { to: '/picklist', icon: 'clipboard-list', label: 'Picklist' },
   { to: '/move', icon: 'arrows-up-down', label: 'Move Item' },
   { section: 'Operations' },
+  { to: '/history', icon: 'timeline', label: 'History' },
   { to: '/reports', icon: 'chart-bar', label: 'Reports' },
   { to: '/report', icon: 'file-lines', label: 'Rack Report' },
   { to: '/audit', icon: 'clock-rotate-left', label: 'Audit Log' },

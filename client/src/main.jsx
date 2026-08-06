@@ -11,6 +11,7 @@ import ItemManagement from './pages/ItemManagement.jsx';
 import AddItem from './pages/AddItem.jsx';
 import MoveItem from './pages/MoveItem.jsx';
 import Picklist from './pages/Picklist.jsx';
+import History from './pages/History.jsx';
 import RackReport from './pages/RackReport.jsx';
 import Reports from './pages/Reports.jsx';
 import AuditLog from './pages/AuditLog.jsx';
@@ -41,6 +42,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="add" element={<AddItem />} />
             <Route path="move" element={<MoveItem />} />
             <Route path="picklist" element={<Picklist />} />
+            <Route path="history" element={<History />} />
             <Route path="reports" element={<Reports />} />
             <Route path="report" element={<RackReport />} />
             <Route path="audit" element={<AuditLog />} />

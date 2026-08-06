@@ -37,6 +37,7 @@ export default function Picklist() {
   const [alloc, setAlloc] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [printing, setPrinting] = useState(false);
 
   // Typed item/colour/size text has to match the stored stock exactly for a
   // rack lookup to hit, so every field is backed by what is actually in the
@@ -70,6 +71,12 @@ export default function Picklist() {
     return sizes ? [...sizes.entries()].sort((a, b) => sizeKey(a[0]) - sizeKey(b[0]) || a[0].localeCompare(b[0])) : [];
   }, [catalog, draft.item, draft.color]);
 
+  // How far the draft exceeds what's on hand, summed across its size run.
+  const draftOver = draftSizes.reduce(
+    (s, [size, have]) => s + Math.max(0, (Number(draft.sizeQty[size]) || 0) - have),
+    0
+  );
+
   // Any edit to the challan invalidates a picklist generated from the old one.
   const clearPicklist = () => { setDetail(null); setAlloc({}); };
   const editLines = (next) => { setLines(next); clearPicklist(); };
@@ -97,7 +104,9 @@ export default function Picklist() {
     setLoading(true);
     try {
       const res = mode === 'manual'
-        ? await api.resolvePicklist({ lines })
+        // Pass the current id back so iterating on the same challan updates one
+        // history entry rather than leaving a trail of abandoned ones.
+        ? await api.resolvePicklist({ dcNo: dcNo.trim() || null, party, lines, picklistId: detail?.id ?? null })
         : await api.picklist(dc);
       setDetail(res);
       // Seed the boxes from the server's largest-rack-first suggestion.
@@ -109,6 +118,24 @@ export default function Picklist() {
       clearPicklist();
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Opens the printable sheet in a new tab. Popup blockers only trust a window
+  // opened synchronously from the click, so the tab is claimed first and its
+  // location set once the PDF has been fetched.
+  const openPdf = async () => {
+    const tab = window.open('', '_blank');
+    setPrinting(true);
+    try {
+      const url = await api.picklistPdf(detail.id, detail.dcNo ? `picklist-${detail.dcNo}` : `picklist-${detail.id}`);
+      if (tab) tab.location = url;
+      else window.open(url, '_blank');   // blocked anyway — try once more
+    } catch (e) {
+      tab?.close();
+      toast(e.message, 'error');
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -124,16 +151,20 @@ export default function Picklist() {
       .filter((p) => p.qty > 0);
     if (!picks.length) return toast('Nothing allocated to pick', 'warning');
 
+    const short = detail.rows.filter((r) => r.shortage > 0);
     setSaving(true);
     try {
-      const res = await api.pickItems(detail.dcNo, picks);
+      const res = await api.pickItems(detail.dcNo, picks, detail.id);
       toast(`${res.pickedQty} units picked${detail.dcNo ? ` for ${detail.dcNo}` : ''} across ${res.racks.length} rack(s)`, 'success');
-      const short = detail.rows.filter((r) => r.shortage > 0);
       if (short.length) {
         toast(`${short.length} line(s) still short: ${short.map((r) => r.item).join(', ')}`, 'warning');
       }
+      // The pick is done — clear the whole challan so the next one starts from
+      // a blank slate. Leaving the list up invites picking it a second time.
       setStock(await api.listItems());   // the catalogue's availability just changed
-      await generate(detail.dcNo);        // re-read so the rack quantities on screen are live
+      setLines([]); setDraft(EMPTY_DRAFT);
+      setDcNo(''); setParty('');
+      clearPicklist();
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -195,7 +226,20 @@ export default function Picklist() {
                 <div className={`tab-btn ${mode === 'module' ? 'active' : ''}`} onClick={() => switchMode('module')}>From Vastra Module</div>
               </div>
 
-              {mode === 'manual' && <p className="text-muted text-sm">Enter item details directly below.</p>}
+              {mode === 'manual' && (
+                <>
+                  <p className="text-muted text-sm">Enter item details directly below.</p>
+                  <div className="grid cols-2 gap-col-4 mt-4">
+                    <Field label="Challan No" value={dcNo} placeholder="optional — for the history record"
+                      onChange={(v) => { setDcNo(v); clearPicklist(); }} />
+                    <Field label="Party" value={party} placeholder="optional" onChange={setParty} />
+                  </div>
+                  <p className="text-xs text-muted">
+                    Both optional. Filling in the challan no. is what lets you find this picklist again in
+                    History if the stock ever looks wrong.
+                  </p>
+                </>
+              )}
 
               {mode === 'module' && (
                 <div className="form-group" style={{ marginBottom: 0 }}>
@@ -293,16 +337,31 @@ export default function Picklist() {
                     <div className="form-group">
                       <label className="form-label">Quantity per size</label>
                       <div className="size-run">
-                        {draftSizes.map(([size, have]) => (
-                          <div key={size} className="size-cell">
-                            <div className="size-cell-label">{size || 'no size'}</div>
-                            <input className="form-control" type="number" min="0" placeholder="0"
-                              value={draft.sizeQty[size] ?? ''}
-                              onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
-                            <div className="size-cell-stock">{have} in stock</div>
-                          </div>
-                        ))}
+                        {draftSizes.map(([size, have]) => {
+                          // A challan can legitimately ask for more than we
+                          // hold — that is what the shortage badge is for — so
+                          // this warns rather than clamping. Clamping would
+                          // quietly rewrite the customer's order.
+                          const over = (Number(draft.sizeQty[size]) || 0) > have;
+                          return (
+                            <div key={size} className={`size-cell ${over ? 'over' : ''}`}>
+                              <div className="size-cell-label">{size || 'no size'}</div>
+                              <input className="form-control" type="number" min="0" placeholder="0"
+                                value={draft.sizeQty[size] ?? ''}
+                                onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
+                              <div className="size-cell-stock">{have} in stock</div>
+                              {over && <div className="size-cell-over">only {have}</div>}
+                            </div>
+                          );
+                        })}
                       </div>
+                      {draftOver > 0 && (
+                        <p className="text-xs text-danger mt-1">
+                          <i className="fa-solid fa-triangle-exclamation" />&nbsp;
+                          {draftOver} unit{draftOver > 1 ? 's' : ''} more than stock. You can still add it —
+                          it will show as short on the picklist.
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -386,7 +445,13 @@ export default function Picklist() {
           <div className="card" style={{ gridColumn: '1 / -1' }}>
             <div className="card-header">
               <span className="card-title"><i className="fa-solid fa-clipboard-list text-primary-color" />&nbsp; Picklist{detail.dcNo ? ` — ${detail.dcNo}` : ''}</span>
-              <span className="badge badge-primary">{totalPicked} of {totals.qty} allocated</span>
+              <span className="flex items-center gap-3">
+                <span className="badge badge-primary">{totalPicked} of {totals.qty} allocated</span>
+                <button className="btn btn-outline btn-sm" onClick={openPdf} disabled={printing || !detail.id}>
+                  <i className={`fa-solid ${printing ? 'fa-spinner fa-spin' : 'fa-file-pdf'}`} />
+                  &nbsp; {printing ? 'Building…' : 'Print PDF'}
+                </button>
+              </span>
             </div>
             <div className="card-body">
               <div className="data-table-wrap">

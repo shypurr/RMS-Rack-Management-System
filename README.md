@@ -150,7 +150,12 @@ rack** each item on it is sitting in — then deducts the stock once the picker 
    holding that item. Lines repeated on one challan are merged into a single row.
    **This step is read-only; it never touches stock.**
 3. **Update Rack.** Deducts the quantities in the per-rack boxes. Boxes are pre-filled
-   largest-rack-first until the line is covered, and the picker can override them.
+   largest-rack-first until the line is covered, and the picker can override them. The whole
+   challan then clears — leaving the list on screen invites picking it a second time.
+
+A **Print PDF** button on the generated list opens a printable sheet in a new tab, laid out
+with the same columns as the screen. Challan No and Party are optional fields kept only for
+the history record.
 
 Manual entry is backed by the stock actually in the racks: the item field matches on any
 substring (typing `Dupatta` finds `Chiffon Dupatta`) and fills in the stored name, colour
@@ -159,8 +164,35 @@ rack lookup matches `(item, colour, size)` **exactly**, so a name that doesn't r
 silently find nothing — the form warns instead, and the line still goes on the list and
 reports as short. `+ Add a size not in stock` covers sizes the warehouse doesn't carry.
 
-Nothing entered is persisted. The durable record is the audit trail written when the racks
-are updated.
+Entering more than the racks hold is **allowed and flagged**, not blocked: a challan can
+legitimately order stock you don't have. The size box turns red with `only N` under it, and
+the line flows through as a shortage. Clamping would quietly rewrite the customer's order.
+
+### Picklist history and `rack updated`
+
+A `picklist` row is written when a picklist is **generated**, not when the racks are updated.
+Generating still changes no stock — but leaving a trace is the whole point of the
+`rack updated: true/false` column in History: a picklist that was produced and then never
+acted on is exactly where a stock discrepancy hides.
+
+- Regenerating while iterating on the same challan **updates the same row** (the client passes
+  the id back), so history is one entry per picklist, not one per click.
+- Once its racks are updated a row is **closed** — a further generate starts a new entry,
+  because that is a genuinely new pick.
+- `picklist_line` stores a text snapshot (including the suggested racks), not foreign keys
+  into `item_location`: those rows get deducted, merged and deleted, and a history entry has
+  to stay readable afterwards.
+- The tables live in `migrations/picklist.sql`, applied at boot like `auth.sql` rather than
+  from `schema.sql` — this is operational history, and `npm run seed` must not drop it.
+
+**History tab** reads both flows from wherever each one actually records itself: putaway from
+`audit_log` (`add` rows), picklists from the `picklist` table. `audit_log` alone could not
+answer the question, because generating writes no audit row by design. The Audit Log tab
+stays as the raw everything-view.
+
+On the putaway side, `after_json.qty` is the row's total *after* the add, which for a merge
+into existing stock is not what was put away — history reports the difference against
+`before_json` instead, and notes what the rack held afterwards.
 
 **Size runs.** A real challan lists one design once and spreads it across a row of sizes:
 
@@ -269,6 +301,9 @@ npm run seed -- --empty   # schema + 100 empty racks + source txns only, no stoc
   `user_id` is the logged-in org's `vastra_org_id`.
 - `source_transaction(...)` — stub feeding Flow A (inbound) and Flow C (delivery challans) until
   real Vastra integration. Its `module_type` ENUM has the challan; `item_location`'s does not.
+- `picklist(id, dc_no, party, source, total_qty, short_qty, rack_updated, picked_qty, picked_at, user_id)`
+  and `picklist_line(...)` — written on **generate**, closed on Update Rack. In
+  `migrations/picklist.sql`, applied at boot, so a demo reseed never deletes real history.
 - `organization(id, vastra_org_id UNIQUE, name, mobile, vastra_access_token, blocked)` —
   mirrored from Vastra on OTP login. `vastra_org_id` is the identity key; matching on mobile
   or name would be wrong, both change.
@@ -296,6 +331,7 @@ What each page does with them:
 | Move Item | Variants show their module codes; search matches item, colour, size or code |
 | Picklist | Item / colour / size autocomplete from stock in the racks, because a rack lookup matches them exactly. The generated list resolves each challan line to its racks |
 | Reports | One search box filters every report, matching against all rendered columns |
+| History | Putaway search hits item, colour, size, rack or module code; picklist search hits challan no, party, or `not updated` |
 | Audit Log | Search covers action, entity, user and the before/after JSON |
 
 ## API
@@ -317,10 +353,13 @@ Everything except `/api/health` and `/api/auth/*` requires `Authorization: Beare
 | PATCH | `/api/item-locations/:id` | update qty (0 = remove) |
 | POST | `/api/moves` | atomic move |
 | GET | `/api/source-transactions?moduleType=&q=&limit=` | Flow A feed, inbound modules only. No `q` → latest `limit` (default 10, max 100); with `q` → every match |
-| POST | `/api/picklist/resolve` | `{ lines: [{ item, color, size, qty }] }` → where each line is stored. Read-only. **The path in use today.** `dcNo` / `party` / `date` are optional and only the module tab supplies them |
+| POST | `/api/picklist/resolve` | `{ lines: [{ item, color, size, qty }], dcNo?, party?, picklistId? }` → where each line is stored. Changes no stock, but records a history entry. **The path in use today** |
 | GET | `/api/picklist/challans?q=&limit=` | delivery challans from the module, grouped one entry per **document**. Awaiting the Vastra API |
 | GET | `/api/picklist/:dcNo` | same picklist, built from the module instead of typed lines. Awaiting the Vastra API |
-| POST | `/api/picklist/pick` | `{ picks: [{ itemLocationId, qty }], dcNo? }` — deducts the stock. Atomic. `dcNo` rides in the body because manual entry has none |
+| POST | `/api/picklist/pick` | `{ picks: [{ itemLocationId, qty }], dcNo?, picklistId? }` — deducts the stock. Atomic. `dcNo` rides in the body because manual entry has none; `picklistId` closes the history entry |
+| GET | `/api/picklist/:id/pdf` | the printable sheet, `application/pdf` (pdfkit, no headless browser) |
+| GET | `/api/history/putaway?limit=` | stock added to racks, newest first (from `audit_log`) |
+| GET | `/api/history/picklists?limit=` | every picklist generated, with `rack_updated` |
 | GET | `/api/audit-log` | history |
 
 ## Verify (matches plan)
@@ -436,6 +475,30 @@ curl -s -X POST localhost:4000/api/picklist/pick \
 curl -s -X POST localhost:4000/api/picklist/pick \
   -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"picks":[{"itemLocationId":16,"qty":10}]}'
+```
+
+### Picklist history and PDF
+
+```bash
+T=<token>
+
+# generating writes a history entry with rack_updated = false
+curl -s "localhost:4000/api/history/picklists?limit=5" -H "Authorization: Bearer $T"
+
+# regenerating with the same picklistId must UPDATE that entry, not add another;
+# after a pick the entry is closed, so a further generate starts a new one
+
+# after POST /api/picklist/pick with that picklistId, the same row reads
+#   "rack_updated": true, "picked_qty": N, "picked_at": ...
+
+# the printable sheet — expect application/pdf and a real PDF on disk
+curl -s -D - -o /tmp/picklist.pdf "localhost:4000/api/picklist/1/pdf" \
+  -H "Authorization: Bearer $T" | grep -i 'content-type\|content-disposition'
+file /tmp/picklist.pdf            # → PDF document
+
+# putaway history. `qty` is what was ADDED, which for a merge into existing
+# stock differs from the row total in the audit row it came from
+curl -s "localhost:4000/api/history/putaway?limit=5" -H "Authorization: Bearer $T"
 ```
 
 Delivery Challan must never appear in the inbound feed — this should list four module types

@@ -63,8 +63,27 @@ export const api = {
   resolvePicklist: (body) => request('/picklist/resolve', { method: 'POST', body }),
   picklist: (dcNo) => request(`/picklist/${encodeURIComponent(dcNo)}`),
   // dcNo is optional — manual entry has none, it only exists on the module path.
-  pickItems: (dcNo, picks) =>
-    request('/picklist/pick', { method: 'POST', body: { dcNo: dcNo || null, picks } }),
+  // picklistId closes the matching history entry (rack updated: yes).
+  pickItems: (dcNo, picks, picklistId = null) =>
+    request('/picklist/pick', { method: 'POST', body: { dcNo: dcNo || null, picks, picklistId } }),
+
+  historyPutaway: (limit = 100) => request(`/history/putaway?limit=${limit}`),
+  historyPicklists: (limit = 100) => request(`/history/picklists?limit=${limit}`),
+
+  // The PDF endpoint needs the Authorization header, which a plain
+  // window.open() cannot send — so fetch it, then open the result as a blob.
+  // Wrapped in a File so the viewer's download button gets a real filename.
+  picklistPdf: async (id, name) => {
+    const res = await fetch(`/api/picklist/${id}/pdf`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Could not build the PDF (${res.status})`);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(new File([blob], `${name}.pdf`, { type: 'application/pdf' }));
+  },
 
   auditLog: (action) => request(`/audit-log${action ? `?action=${encodeURIComponent(action)}` : ''}`),
 
