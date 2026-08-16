@@ -200,6 +200,7 @@ export default function AddItem() {
 function TxnCombobox({ moduleType, onSelect, onClear }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [error, setError] = useState(null); // why the list is empty, when it isn't "no matches"
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState(false); // a txn is currently selected
   const blurTimer = useRef(null);
@@ -210,8 +211,11 @@ function TxnCombobox({ moduleType, onSelect, onClear }) {
     if (picked) return;
     const t = setTimeout(() => {
       api.sourceTransactions(moduleType, query.trim(), 10)
-        .then(setResults)
-        .catch(() => setResults([]));
+        .then((rows) => { setResults(rows); setError(null); })
+        // Swallowing this used to render an empty dropdown for a module that was
+        // actually erroring — "no transactions" and "Vastra is unreachable" looked
+        // identical. Show what the server said instead.
+        .catch((e) => { setResults([]); setError(e.message); });
     }, query.trim() ? 200 : 0);
     return () => clearTimeout(t);
   }, [query, moduleType, picked]);
@@ -253,7 +257,11 @@ function TxnCombobox({ moduleType, onSelect, onClear }) {
         </div>
       )}
       {open && results.length === 0 && (
-        <div className="txn-dropdown"><div className="txn-option text-muted">No matching transactions</div></div>
+        <div className="txn-dropdown">
+          <div className={`txn-option ${error ? 'text-danger' : 'text-muted'}`}>
+            {error || 'No matching transactions'}
+          </div>
+        </div>
       )}
     </div>
   );

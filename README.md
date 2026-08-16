@@ -122,7 +122,8 @@ Notes worth keeping, all learned the hard way:
 
 Both backends live behind `services/sourceModules.js` → `fetchTransactions(org, { moduleType, q,
 limit })`, shared by the Flow A feed and the picklist so the branching exists once. Failure
-handling is there too: no stored Vastra token → **409**; a rejection → **502**.
+handling is there too: no stored Vastra token → **401**; an auth-shaped rejection → **401** (and the
+RMS session is destroyed so the client redirects to the login screen); any other rejection → **502**.
 
 Vastra answers `status:false` for *everything* it refuses, so an expired token and a module it
 won't serve are indistinguishable at the transport level. Only an **auth-shaped** rejection
@@ -411,6 +412,20 @@ node server/checkAuth.js
 It talks to the configured MySQL (creating and removing one throwaway org), and skips the DB
 assertions with a notice if the database is unreachable.
 
+### Expired Vastra token → forced re-login
+
+```bash
+node server/checkSessionRecovery.js
+#   ✓ happy path: a valid token serves normalized rows to the panel
+#   ✓ auth-shaped rejection → 401, Vastra token cleared, RMS session destroyed
+#   ✓ follow-up request is 401, never the stuck 409
+#   ✓ non-auth refusal → 502, token and session both left intact
+```
+Covers the failure that used to strand a user: Vastra stops accepting the stored token, RMS
+clears it, and every later request answers 409 while the browser still believes it is logged in.
+The session is now destroyed alongside the token and the status is **401**, which is the one the
+client acts on — it drops the session and redirects to `/login`. Needs MySQL; skips without it.
+
 ### Source-module read path
 
 ```bash
@@ -541,6 +556,8 @@ curl -s https://<your-app>.onrender.com/api/health
 | `ECONNREFUSED` | Host resolves, nothing listening | Start MySQL / check `DB_PORT` |
 | `ER_ACCESS_DENIED_ERROR` | Bad credentials | Check `DB_USER` / `DB_PASSWORD` |
 | `ER_BAD_DB_ERROR` | Database missing | `npm run seed` |
+| `HANDSHAKE_SSL_ERROR` | TLS handshake failed. Managed hosts refuse plaintext connections | Set `DB_SSL=true`, and `DB_CA` to the provider's CA cert for full verification |
+| `ETIMEDOUT` | Host never answered — firewall or IP allow-list | Allow the Render outbound IPs in the DB provider's dashboard |
 
 Confirm whether a hostname is really gone with `dig +short @8.8.8.8 <host>` — empty output
 means NXDOMAIN, i.e. the instance is deleted, not merely down.

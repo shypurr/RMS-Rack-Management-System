@@ -29,8 +29,12 @@ const AUTH_REJECTION = /token|unauthor|expire|session|login|forbidden|denied/i;
 // `{ id, module_type, item, color, size, qty }` shape the stub returns — so the
 // client needs no changes either way.
 async function fromVastra(org, { moduleType, q, limit }) {
+  // 401, not 409: a missing Vastra token means this login can no longer do
+  // anything useful, and the only cure is a fresh OTP. The client treats 401
+  // from ANY endpoint as "session gone" — it clears the stored token and sends
+  // the user to /login. A 409 left them logged in and stuck forever.
   if (!org.vastra_access_token) {
-    throw new HttpError(409, 'No Vastra session — log out and log back in.');
+    throw new HttpError(401, 'Vastra session expired — please log in again.');
   }
   const types = moduleType ? [moduleType] : MODULE_TYPES;
   let rows;
@@ -50,8 +54,13 @@ async function fromVastra(org, { moduleType, q, limit }) {
       // branch needs positive evidence, not the benefit of the doubt.
       console.error(`Vastra rejected ${moduleType || 'all modules'}:`, err.code, err.message);
       if (AUTH_REJECTION.test(`${err.code} ${err.message}`)) {
+        // Clearing the Vastra token alone used to leave the RMS session alive,
+        // pointing at a NULL token — every later request 409'd with no way out
+        // and no prompt to log in. Kill the session in the same breath so the
+        // user is bounced to /login and the next OTP restores both.
+        await pool.query('DELETE FROM session WHERE org_id = ?', [org.id]);
         await pool.query('UPDATE organization SET vastra_access_token = NULL WHERE id = ?', [org.id]);
-        throw new HttpError(502, 'Vastra rejected the stored token — log out and log back in.');
+        throw new HttpError(401, 'Vastra rejected the stored session — please log in again.');
       }
       // Not auth — surface Vastra's own words (safe to show) and keep the
       // session, so one bad module doesn't take the working ones down with it.
