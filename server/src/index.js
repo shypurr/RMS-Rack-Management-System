@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
 import { pingDb, dbTarget, applyAuthSchema } from './db.js';
+import { pingMqtt, mqttConfigured, mqttTarget } from './mqttClient.js';
 
 const port = Number(process.env.PORT) || 4000;
 
@@ -33,6 +34,22 @@ if (err) {
     console.error(`  ✗ Could not apply auth schema (${e.code || 'ERROR'}): ${e.message}`);
     console.error('    Login will fail until this is fixed.\n');
   }
+}
+
+// Probe the broker the same way, for the same reason: QR login fails silently
+// otherwise — the QR renders, nothing ever publishes, and it just times out.
+// Not fatal; OTP login works without it.
+if (mqttConfigured()) {
+  const mqttErr = await pingMqtt();
+  if (mqttErr) {
+    console.error(`\n  ✗ Cannot reach the MQTT broker at ${mqttTarget()}`);
+    console.error(`    ${mqttErr.message}`);
+    console.error('    QR login will not work until this is fixed. OTP login is unaffected.\n');
+  }
+  // No success log here — mqttClient's own 'connect' handler already prints
+  // one, and it prints again on every reconnect.
+} else {
+  console.log('MQTT_URL not set — QR login is disabled (OTP login still works)');
 }
 
 createApp().listen(port, () => console.log(`RMS API on http://localhost:${port}`));

@@ -79,6 +79,36 @@ export async function verifyLoginOtp(countryCode, mobile, otp) {
   return data;
 }
 
+// ── QR login ──────────────────────────────────────────────────────────────
+// Step 3 of the QR flow, and the only part of it that carries credentials. The
+// MQTT approval message is just a doorbell: it says "this mobile approved that
+// topic" and nothing more. This call is what Vastra actually authenticates —
+// it only succeeds because Vastra's own server already recorded the approval.
+//
+// `topic` must be the 31-character prefix (firstTopic + value), NOT the full
+// 42-character subscribe topic. services/qrLogin.js does that slice; the length
+// check here is a backstop, since a wrong-length topic is otherwise a confusing
+// "invalid QR" from Vastra with no hint as to why.
+export const QR_API_TOPIC_LENGTH = 31;
+
+export async function verifyQrCode(mobile, topic, countryCode) {
+  if (String(topic).length !== QR_API_TOPIC_LENGTH) {
+    throw new VastraApiError(
+      `admin-user-verifyQRCode needs a ${QR_API_TOPIC_LENGTH}-char topic, got ${String(topic).length}`
+    );
+  }
+  const data = await call('POST', '/user/admin-user-verifyQRCode', {
+    json: { mobile, topic, country_code: countryCode },
+  });
+  // Same guard as verifyLoginOtp: a half-empty profile must never create a
+  // session. Without access_token the session would exist but every module
+  // read (Putaway, Picklist) would fail for it.
+  if (!data?.organization_Id || !data?.access_token) {
+    throw new VastraApiError('admin-user-verifyQRCode returned no organization_Id/access_token');
+  }
+  return data;
+}
+
 // ── source modules (Flow A) ───────────────────────────────────────────────
 // Inbound only — these four feed putaway (Add Item) and the no-moduleType
 // fan-out in /api/source-transactions. Delivery Challan is deliberately NOT

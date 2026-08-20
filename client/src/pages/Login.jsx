@@ -2,12 +2,18 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, setToken } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
+import QrSignIn from '../components/QrSignIn.jsx';
 
-// Vastra mobile + OTP login. Two steps: mobile → OTP. There is no password and
-// no signup — only organizations that already exist in Vastra can get in.
+// Two ways in, both ending at the same place: an RMS session token from
+// /api/auth. Vastra is the identity provider either way — there is no password
+// and no signup, so only organizations that already exist there can get in.
+//
+//   OTP — mobile → OTP, entered here.
+//   QR  — scan the code in the Vastra app and confirm on the phone.
 export default function Login() {
   const toast = useToast();
   const navigate = useNavigate();
+  const [mode, setMode] = useState('otp');
   const [step, setStep] = useState('mobile');
   const [countryCode, setCountryCode] = useState('+91');
   const [mobile, setMobile] = useState('');
@@ -28,14 +34,20 @@ export default function Login() {
     }
   };
 
+  // Both login paths land here. QrSignIn has already stored the token by the
+  // time it calls this, exactly as verify() does below.
+  const enter = (org) => {
+    toast(`Welcome, ${org.name}`, 'success');
+    navigate('/', { replace: true });
+  };
+
   const verify = async () => {
     if (!otp.trim()) return toast('Enter the OTP', 'warning');
     setBusy(true);
     try {
       const { token, org } = await api.verifyOtp(countryCode, mobile, otp.trim());
       setToken(token);
-      toast(`Welcome, ${org.name}`, 'success');
-      navigate('/', { replace: true });
+      enter(org);
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -52,6 +64,43 @@ export default function Login() {
             <div className="logo-text">Vastra<span>WMS</span></div>
           </div>
           <h2 className="font-700 mb-2">Sign in</h2>
+
+          <div
+            role="tablist"
+            className="flex mb-4"
+            style={{ borderBottom: '1px solid var(--border, #e5e7eb)', gap: 4 }}
+          >
+            {[['otp', 'Mobile OTP'], ['qr', 'Scan QR']].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={mode === key}
+                onClick={() => setMode(key)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '8px 12px',
+                  fontWeight: mode === key ? 700 : 500,
+                  color: mode === key ? 'var(--primary, #2563eb)' : 'var(--text-muted, #6b7280)',
+                  // Transparent, not absent, so switching tabs does not shift
+                  // the panel by a pixel.
+                  borderBottom: `2px solid ${mode === key ? 'var(--primary, #2563eb)' : 'transparent'}`,
+                  marginBottom: -1,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === 'qr' ? (
+            // Mounting starts an attempt; unmounting cancels it, so flipping
+            // tabs never leaves an MQTT subscription open on the server.
+            <QrSignIn onSuccess={enter} onError={(m) => m && toast(m, 'error')} />
+          ) : (
+          <>
           <p className="text-sm text-muted mb-4">
             {step === 'mobile'
               ? 'Enter the mobile number registered with Vastra. We will text you an OTP.'
@@ -95,6 +144,8 @@ export default function Login() {
                 </a>
               </div>
             </form>
+          )}
+          </>
           )}
         </div>
       </div>

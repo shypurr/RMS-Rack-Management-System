@@ -256,10 +256,12 @@ export default function Picklist() {
 
           {/* Step 2 — the lines. A challan lists one design across a run of sizes,
               so a design is entered once and its sizes filled in together. */}
+          {/* overflow:visible on the card, not the body: .card clips, so the
+              item dropdown was cut off at the card's bottom edge */}
           {mode === 'manual' && (
-            <div className="card mb-4">
+            <div className="card mb-4" style={{ overflow: 'visible' }}>
               <div className="card-header"><span className="card-title"><i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — Items on the Challan</span></div>
-              <div className="card-body" style={{ overflow: 'visible' }}>
+              <div className="card-body">
                 {/* Items already on the challan — one block per design+colour,
                     numbered like the challan's Sr column. */}
                 {blocks.length > 0 && (

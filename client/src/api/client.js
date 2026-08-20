@@ -34,6 +34,14 @@ export const api = {
   me: () => request('/auth/me'),
   logout: () => request('/auth/logout', { method: 'POST' }),
 
+  // QR login. `qrStart` returns the value to draw plus the secret that proves
+  // this tab owns the attempt; `qrStatus` is polled until it answers approved,
+  // at which point it carries the same { token, org } verify-otp does.
+  qrStart: () => request('/auth/qr/start', { method: 'POST' }),
+  qrStatus: (id, secret) =>
+    request(`/auth/qr/status?id=${encodeURIComponent(id)}&secret=${encodeURIComponent(secret)}`),
+  qrCancel: (id, secret) => request('/auth/qr/cancel', { method: 'POST', body: { id, secret } }),
+
   listRacks: () => request('/racks'),
   getRack: (id) => request(`/racks/${encodeURIComponent(id)}`),
   createRack: (rackId, capacity) => request('/racks', { method: 'POST', body: { rackId, capacity } }),

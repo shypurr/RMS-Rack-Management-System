@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { randomBytes } from 'node:crypto';
-import { pool, withTransaction } from '../db.js';
+import { pool } from '../db.js';
 import { HttpError } from '../services/rackService.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { sendLoginOtp, verifyLoginOtp, VastraApiError, VastraRejection } from '../vastraClient.js';
+import { establishSession } from '../services/session.js';
+import { startAttempt, readAttempt, cancelAttempt } from '../services/qrLogin.js';
 
 const router = Router();
 
@@ -91,45 +92,62 @@ router.post('/verify-otp', rateLimit, async (req, res, next) => {
       throw toHttpError(err, 401);
     }
 
-    const vastraOrgId = String(profile.organization_Id);
-    const name = profile.organization_name || `Org ${vastraOrgId}`;
+    // Shared with the QR path (services/qrLogin.js) so both login methods mint
+    // sessions identically — same blocked check, same single-active-session
+    // rule, same token refresh. Never returns the vastra_access_token.
+    res.json(await establishSession(profile, mobile));
+  } catch (err) {
+    next(err);
+  }
+});
 
-    const [[existing]] = await pool.query(
-      'SELECT id, blocked FROM organization WHERE vastra_org_id = ?',
-      [vastraOrgId]
-    );
-    if (existing?.blocked) throw new HttpError(403, 'Account is blocked');
+// ── QR login ──────────────────────────────────────────────────────────────
+// The browser's whole view of the QR flow is these three endpoints. Everything
+// else — the MQTT subscription, the two Vastra messages, the verify call — is
+// handled in services/qrLogin.js, because Vastra gave us a plain TCP broker
+// socket and a browser has no TCP API to dial it with.
 
-    let orgId;
-    if (existing) {
-      orgId = existing.id;
-      // Refresh all three every login: the token rotates and the org name can
-      // change on Vastra's side.
-      await pool.query(
-        'UPDATE organization SET name = ?, mobile = ?, vastra_access_token = ? WHERE id = ?',
-        [name, String(mobile), profile.access_token, orgId]
-      );
-    } else {
-      // The only INSERT into `organization` in the codebase. Not "creating an
-      // account for a stranger": Vastra just vouched for this org via a
-      // verified OTP, so we mirror their identity locally to have something for
-      // our foreign keys and audit trail to point at.
-      const [ins] = await pool.query(
-        'INSERT INTO organization (vastra_org_id, name, mobile, vastra_access_token) VALUES (?, ?, ?, ?)',
-        [vastraOrgId, name, String(mobile), profile.access_token]
-      );
-      orgId = ins.insertId;
-    }
-
-    // One active session per org — logging in anywhere kills the old session.
-    const token = randomBytes(32).toString('hex');
-    await withTransaction(async (conn) => {
-      await conn.query('DELETE FROM session WHERE org_id = ?', [orgId]);
-      await conn.query('INSERT INTO session (token, org_id) VALUES (?, ?)', [token, orgId]);
+// POST /api/auth/qr/start — mint an attempt and return what to draw.
+// `poll_secret` is the browser's claim on this attempt: the QR on screen is
+// public, this is not, so a photographed QR alone cannot collect the session.
+router.post('/qr/start', rateLimit, async (req, res, next) => {
+  try {
+    const attempt = await startAttempt();
+    res.json({
+      id: attempt.id,
+      poll_secret: attempt.pollSecret,
+      value: attempt.value, // exactly what goes in the QR — the bare 15 chars
+      expires_at: attempt.expiresAt,
     });
+  } catch (err) {
+    next(toHttpError(err, 403));
+  }
+});
 
-    // Never the vastra_access_token — that stays server-side.
-    res.json({ token, org: { id: orgId, name } });
+// GET /api/auth/qr/status — polled while the QR is on screen.
+//   pending  → waiting for a scan
+//   scanned  → Vastra published isVerified; confirm on the phone
+//   approved → carries { token, org }, exactly like verify-otp
+//   expired | error | unknown → start a new attempt
+// `unknown` deliberately covers both "no such attempt" and "wrong secret", so
+// the endpoint cannot be used to probe which attempt ids are live.
+router.get('/qr/status', (req, res, next) => {
+  try {
+    const { id, secret } = req.query || {};
+    if (!id || !secret) throw new HttpError(400, 'id and secret are required');
+    res.json(readAttempt(String(id), String(secret)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/qr/cancel — leaving the tab drops the MQTT subscription
+// instead of holding it until the TTL sweeps it up.
+router.post('/qr/cancel', (req, res, next) => {
+  try {
+    const { id, secret } = req.body || {};
+    if (id && secret) cancelAttempt(String(id), String(secret));
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
