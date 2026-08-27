@@ -18,6 +18,16 @@ import { pool } from './db.js';
 //      losing those rows is provably safe.
 //   3. It records itself in the ledger, so it never runs a second time even if
 //      someone later reshapes the table by hand.
+//
+// Rule 2 has one deliberate override. A database built before organization
+// scoping cannot be reshaped in place — rack identity changed from a text code
+// (R05-S02-B04) to a surrogate id — so a deployment holding throwaway rows can
+// otherwise never migrate itself, and every request keeps failing with
+// "Unknown column 'fk_org_id'". Setting ALLOW_DESTRUCTIVE_MIGRATION=true says
+// "those rows are expendable, discard them". It is read per migration, announced
+// in full before anything is dropped, and needed exactly once: the ledger records
+// the migration, so the variable should be removed from the environment straight
+// after the deploy that used it.
 
 const LEDGER = `
   CREATE TABLE IF NOT EXISTS schema_migration (
@@ -50,6 +60,10 @@ async function rowCount(table) {
   return Number(row.n);
 }
 
+// Opt-in permission to destroy rows a migration cannot carry across. Off unless
+// the environment says otherwise, so no deployment ever loses data by default.
+const destructiveAllowed = () => process.env.ALLOW_DESTRUCTIVE_MIGRATION === 'true';
+
 // ── the migrations ────────────────────────────────────────────────────────
 
 const MIGRATIONS = [
@@ -78,15 +92,25 @@ const MIGRATIONS = [
 
       if (populated.length) {
         const detail = populated.map(([t, n]) => `${t}=${n}`).join(', ');
-        throw new Error(
-          `Refusing to rebuild core tables: they still hold rows (${detail}). ` +
-          'These tables cannot be migrated in place — rack identity changed from a ' +
-          'text code to a numeric id. Export anything you need, empty them, and ' +
-          'restart; or run `npm run seed` to discard them deliberately.'
+        if (!destructiveAllowed()) {
+          throw new Error(
+            `Refusing to rebuild core tables: they still hold rows (${detail}). ` +
+            'These tables cannot be migrated in place — rack identity changed from a ' +
+            'text code to a numeric id. Export anything you need, empty them, and ' +
+            'restart; or set ALLOW_DESTRUCTIVE_MIGRATION=true to discard these rows ' +
+            'deliberately on the next boot.'
+          );
+        }
+        // Say exactly what is about to be lost, before it is lost. If this line
+        // appears in a log where nobody meant to set the variable, it is the
+        // record of what happened.
+        console.warn(
+          `  ! ALLOW_DESTRUCTIVE_MIGRATION=true — discarding rows to rebuild core ` +
+          `tables (${detail}). Racks and stored stock are being deleted.`
         );
       }
 
-      // All empty: dropping loses nothing. core.sql recreates them correctly in
+      // Empty, or emptying deliberately: core.sql recreates these correctly in
       // the standing pass that runs straight after this.
       await pool.query('SET FOREIGN_KEY_CHECKS = 0');
       try {
@@ -94,7 +118,9 @@ const MIGRATIONS = [
       } finally {
         await pool.query('SET FOREIGN_KEY_CHECKS = 1');
       }
-      return `rebuilt ${tables.length} empty tables`;
+      return populated.length
+        ? `rebuilt ${tables.length} tables, discarding ${populated.map(([t, n]) => `${t}=${n}`).join(', ')}`
+        : `rebuilt ${tables.length} empty tables`;
     },
   },
 
@@ -110,11 +136,21 @@ const MIGRATIONS = [
     async run() {
       const n = await rowCount('picklist');
       if (n > 0) {
-        throw new Error(
-          `Refusing to add picklist.fk_org_id: the table holds ${n} rows and there ` +
-          'is no way to know which organization each belongs to. Empty the table ' +
-          'or assign owners by hand, then restart.'
+        if (!destructiveAllowed()) {
+          throw new Error(
+            `Refusing to add picklist.fk_org_id: the table holds ${n} rows and there ` +
+            'is no way to know which organization each belongs to. Empty the table, ' +
+            'assign owners by hand, or set ALLOW_DESTRUCTIVE_MIGRATION=true to ' +
+            'discard them on the next boot.'
+          );
+        }
+        console.warn(
+          `  ! ALLOW_DESTRUCTIVE_MIGRATION=true — discarding ${n} picklist rows ` +
+          'so the organization column can be added.'
         );
+        // picklist_line has a foreign key onto picklist; clear the children first.
+        if (await tableExists('picklist_line')) await pool.query('DELETE FROM picklist_line');
+        await pool.query('DELETE FROM picklist');
       }
       await pool.query(
         `ALTER TABLE picklist

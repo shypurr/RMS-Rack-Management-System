@@ -87,12 +87,26 @@ const stripComments = (sql) => sql.replace(/--.*/g, '');
 // The order matters: pass 1 may drop a stale table so that pass 2 can rebuild
 // it with the current definition.
 //
+// Pass 2 runs even when pass 1 fails. A one-time migration that refuses (because
+// it will not destroy rows) says nothing about the tables it does not touch, and
+// letting its error skip pass 2 as well is how one refusal left a deployment
+// with no `picklist`, `rack_layout` or `rack_group_override` table at all — three
+// more broken screens than the refusal actually called for. The error is still
+// raised afterwards, so the caller reports it exactly as before.
+//
 // Returns the list of one-time migrations actually performed, so the caller can
 // log them. On an up-to-date database that list is empty and the whole call
 // costs one SELECT.
 export async function applySchema() {
   const { applyOneTimeMigrations } = await import('./schemaMigrations.js');
-  const performed = await applyOneTimeMigrations();
+
+  let performed = [];
+  let oneTimeError = null;
+  try {
+    performed = await applyOneTimeMigrations();
+  } catch (err) {
+    oneTimeError = err;
+  }
 
   for (const file of STANDING_MIGRATIONS) {
     const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
@@ -100,6 +114,8 @@ export async function applySchema() {
       if (stmt.trim()) await pool.query(stmt);
     }
   }
+
+  if (oneTimeError) throw oneTimeError;
   return performed;
 }
 

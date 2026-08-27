@@ -576,6 +576,32 @@ curl -s https://<your-app>.onrender.com/api/health
 > when the wrong command gets run. Check which database `DB_NAME` / `DB_HOST` point at before
 > you type anything.
 
+**"Unknown column 'fk_org_id' in 'where clause'" on a deployed site.**
+`/api/health` says `db: up`, but every data screen fails. The database was built before
+organization scoping existed, so its tables are the old shape. The standing migrations cannot
+repair it — they are all `CREATE TABLE IF NOT EXISTS`, which does nothing to a table that
+already exists — and the one-time migration that *can* (`src/schemaMigrations.js`) refuses
+while those tables hold rows, because rack identity changed from a text code (`R05-S02-B04`)
+to a numeric id and there is no in-place conversion. The refusal is printed at startup:
+
+```
+  ✗ Could not bring the database up to date: Refusing to rebuild core tables:
+    they still hold rows (rack_master=3, item_location=2, …)
+```
+
+If those rows are expendable, discard them deliberately:
+
+1. Render dashboard → Environment → add `ALLOW_DESTRUCTIVE_MIGRATION` = `true`.
+2. Redeploy. The log names every row it drops, then rebuilds the tables in the current shape.
+3. **Delete the variable again** and redeploy.
+
+Step 3 is hygiene, not safety: the `schema_migration` ledger records the migration, so it can
+never run twice even if the variable is left set. Leaving it set would, however, arm the same
+override for any *future* destructive migration.
+
+If the rows must be kept, do not set the variable — write a backfill migration that stamps
+each row with its owning org and maps old rack codes onto `(rack_no, shelf_no, bin_no)`.
+
 Confirm whether a hostname is really gone with `dig +short @8.8.8.8 <host>` — empty output
 means NXDOMAIN, i.e. the instance is deleted, not merely down.
 
