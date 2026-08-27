@@ -1,26 +1,21 @@
--- Rack Management System — schema (MySQL / InnoDB)
--- Applied by seed.js. Safe to re-run: drops and recreates.
+-- Core business tables (MySQL / InnoDB).
 --
--- WARNING: this file DROPS item_location and audit_log. Once real organizations
--- own rows in them, `npm run seed` destroys customer data. See the warning in
--- README.md under "Run" before running the seed against anything real.
+-- CREATE TABLE IF NOT EXISTS, applied at every boot alongside auth.sql,
+-- picklist.sql and layout.sql. That is what lets a deploy bring its own
+-- database up to date: starting the server is the migration.
 --
--- ORDERING: every table here has a foreign key to `organization`, which lives in
--- auth.sql. seed.js therefore applies the standing migrations FIRST — without
--- that, these CREATE statements fail with errno 150.
-
-SET FOREIGN_KEY_CHECKS = 0;
-DROP TABLE IF EXISTS audit_log;
-DROP TABLE IF EXISTS item_location;
-DROP TABLE IF EXISTS source_transaction;
-DROP TABLE IF EXISTS rack_master;
-SET FOREIGN_KEY_CHECKS = 1;
+-- Nothing here drops anything. `npm run seed` drops these four tables itself
+-- before re-applying this file, so the table definitions live in exactly one
+-- place and cannot drift between "what seed builds" and "what a deploy builds".
+--
+-- ORDERING: every table here has a foreign key to `organization`, which lives
+-- in auth.sql, so auth.sql must be applied first (see STANDING_MIGRATIONS).
 
 -- One row per BIN. `id` is the identity and never changes; the human-readable
 -- code (R001-S01-B01) is derived from the three integers at read time by
 -- src/lib/rackCode.js, so an org growing past a digit boundary re-pads its
 -- labels without renaming anything.
-CREATE TABLE rack_master (
+CREATE TABLE IF NOT EXISTS rack_master (
   id        BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   fk_org_id INT NOT NULL,
   rack_no   INT NOT NULL,
@@ -37,7 +32,7 @@ CREATE TABLE rack_master (
 ) ENGINE=InnoDB;
 
 -- Each item's placement. Many rows may share one bin (shared capacity pool).
-CREATE TABLE item_location (
+CREATE TABLE IF NOT EXISTS item_location (
   id          BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   fk_org_id   INT NOT NULL,
   item        VARCHAR(120) NOT NULL,
@@ -62,7 +57,7 @@ CREATE TABLE item_location (
 -- `user_id` is kept alongside fk_org_id on purpose: fk_org_id is the tenancy
 -- filter, user_id is the ACTOR. They hold the same value today only because
 -- Vastra gives us no per-person identity yet.
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
   id          BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   fk_org_id   INT NOT NULL,
   entity_type ENUM('rack','item_location') NOT NULL,
@@ -82,7 +77,7 @@ CREATE TABLE audit_log (
 -- only when `npm run seed -- --org=<vastra_org_id>` names an owner. In
 -- production USE_VASTRA_MODULES=true bypasses this table entirely and Vastra
 -- scopes the data by access token.
-CREATE TABLE source_transaction (
+CREATE TABLE IF NOT EXISTS source_transaction (
   id          VARCHAR(60) NOT NULL,
   fk_org_id   INT NOT NULL,
   module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return','Delivery Challan') NOT NULL,

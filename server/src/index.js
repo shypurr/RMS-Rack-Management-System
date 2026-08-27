@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
-import { pingDb, dbTarget, applyAuthSchema } from './db.js';
+import { pingDb, dbTarget, applySchema } from './db.js';
 import { pingMqtt, mqttConfigured, mqttTarget } from './mqttClient.js';
 
 const port = Number(process.env.PORT) || 4000;
@@ -26,13 +26,17 @@ if (err) {
   console.error('    The API will start, but every data route returns 503 until fixed.\n');
 } else {
   console.log(`DB connected: ${dbTarget()}`);
-  // Auth tables are not in schema.sql (seed drops that), so create them here.
-  // Idempotent — every restart re-runs it harmlessly.
+  // Bring the database up to date. Creating missing tables is idempotent and
+  // silent; one-time migrations announce themselves and then never run again,
+  // because the schema_migration ledger records each one. A deploy therefore
+  // migrates its own database simply by starting.
   try {
-    await applyAuthSchema();
+    const performed = await applySchema();
+    for (const m of performed) console.log(`  migration applied: ${m}`);
   } catch (e) {
-    console.error(`  ✗ Could not apply auth schema (${e.code || 'ERROR'}): ${e.message}`);
-    console.error('    Login will fail until this is fixed.\n');
+    console.error(`\n  ✗ Could not bring the database up to date: ${e.message}`);
+    console.error('    The API will start, but data routes will fail until this is fixed.');
+    console.error('    Nothing was changed — the migration refused rather than risk data.\n');
   }
 }
 

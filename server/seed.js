@@ -100,19 +100,27 @@ async function main() {
   }
   await conn.query(`USE \`${DB}\``);
 
-  // Standing migrations FIRST. Every table in schema.sql has a foreign key to
-  // `organization`, which lives in auth.sql — applying schema.sql first fails
-  // with errno 150. They are all CREATE TABLE IF NOT EXISTS, so running them
-  // here is harmless and lets `npm run seed` work on a fresh database without
-  // having to boot the server once beforehand.
-  for (const file of ['auth.sql', 'picklist.sql', 'layout.sql']) {
+  // THE destructive step, and the only one. Dropping here rather than inside a
+  // .sql file is deliberate: core.sql is also applied on every server boot, so
+  // it must never contain a DROP. The table definitions therefore live in one
+  // place, and only this script can destroy anything.
+  //
+  // `organization` and `session` are NOT in this list — a reseed must never log
+  // anyone out. Neither is `schema_migration`: the ledger records what has been
+  // migrated, and wiping it would make one-time migrations run again.
+  const DROP_ORDER = ['audit_log', 'item_location', 'source_transaction', 'rack_master'];
+  await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+  for (const t of DROP_ORDER) await conn.query(`DROP TABLE IF EXISTS \`${t}\``);
+  await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+  console.log(`Dropped ${DROP_ORDER.length} core tables.`);
+
+  // auth.sql first: every table in core.sql has a foreign key to `organization`,
+  // so the other order fails with errno 150. All CREATE TABLE IF NOT EXISTS,
+  // which is why the same files serve both this script and a server boot.
+  for (const file of ['auth.sql', 'picklist.sql', 'layout.sql', 'core.sql']) {
     await conn.query(await readFile(path.join(__dirname, 'migrations', file), 'utf8'));
   }
-  console.log('Standing migrations applied (auth, picklist, layout).');
-
-  const schema = await readFile(path.join(__dirname, 'migrations', 'schema.sql'), 'utf8');
-  await conn.query(schema);
-  console.log('Schema applied.');
+  console.log('Schema applied (auth, picklist, layout, core).');
 
   // No racks are seeded, ever. Each organization builds its own layout on the
   // setup screen — that is the point of the rack layout feature, and inventing
