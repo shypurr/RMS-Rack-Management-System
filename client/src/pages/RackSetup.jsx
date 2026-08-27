@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
-import { countBins, findOverlap } from '../lib/layout.js';
+import { countBins, countCapacity, findOverlap } from '../lib/layout.js';
 
 // Rack layout setup.
 //
@@ -58,6 +58,7 @@ export default function RackSetup() {
 
   const overlap = findOverlap(overrides);
   const projected = countBins(form, overrides);
+  const projectedCapacity = countCapacity(form, overrides);
   const sampleCode = current
     ? `R${'1'.padStart(Math.max(2, String(Number(form.racks) || 1).length), '0')}-S01-B01`
     : '';
@@ -131,6 +132,9 @@ export default function RackSetup() {
           <p className="text-sm text-muted mt-4">
             This makes <strong>{projected.toLocaleString()}</strong> bins. Capacity per bin is how
             many units fit inside one bin — not how many bins there are.
+          </p>
+          <p className="text-sm text-muted mt-1">
+            Total capacity is <strong>{projectedCapacity.toLocaleString()}</strong> units.
           </p>
         </div>
       </div>

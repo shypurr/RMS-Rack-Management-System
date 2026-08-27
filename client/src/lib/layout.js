@@ -29,6 +29,23 @@ export function countBins(form, overrides) {
   return n;
 }
 
+// Total units the same grid would hold. Deliberately walks the racks the way
+// countBins does rather than multiplying its result by form.bin_capacity: an
+// override may set its own capacity per bin, and racks outside it keep the base
+// one, so there is no single multiplier. Display only — the server computes the
+// real figure as SUM(rack_master.capacity) once the layout is applied.
+export function countCapacity(form, overrides) {
+  const racks = Number(form.racks) || 0;
+  let n = 0;
+  for (let r = 1; r <= racks; r++) {
+    const hit = overrides.find((o) => r >= Number(o.rack_from) && r <= Number(o.rack_to));
+    n += (Number(hit?.shelves ?? form.shelves) || 0)
+       * (Number(hit?.bins ?? form.bins) || 0)
+       * (Number(hit?.bin_capacity ?? form.bin_capacity) || 0);
+  }
+  return n;
+}
+
 // Ranges may not overlap — the server rejects them, but catching it here means
 // the user sees it while typing instead of after a round trip.
 export function findOverlap(overrides) {
