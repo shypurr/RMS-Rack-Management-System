@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { addItem, updateItemQty, findPlacements } from '../services/rackService.js';
+import { getOrgWidths } from '../services/layoutService.js';
+import { decorateRacks } from '../lib/rackCode.js';
 
 const router = Router();
 
@@ -8,7 +10,7 @@ const router = Router();
 router.get('/placements', async (req, res, next) => {
   try {
     const { item, color = '', size = '' } = req.query;
-    res.json(await findPlacements(pool, { item, color, size }));
+    res.json(await findPlacements(req.org.id, { item, color, size }));
   } catch (err) { next(err); }
 });
 
@@ -16,10 +18,15 @@ router.get('/placements', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, item, color, size, qty, fk_rack_id AS rack_id, module_type, module_id, updated_at
-       FROM item_location ORDER BY item, color, size`
+      `SELECT il.id, il.item, il.color, il.size, il.qty, il.fk_rack_id,
+              rm.rack_no, rm.shelf_no, rm.bin_no,
+              il.module_type, il.module_id, il.updated_at
+       FROM item_location il
+       JOIN rack_master rm ON rm.id = il.fk_rack_id
+       WHERE il.fk_org_id = ? ORDER BY il.item, il.color, il.size`,
+      [req.org.id]
     );
-    res.json(rows);
+    res.json(decorateRacks(rows, await getOrgWidths(req.org.id)));
   } catch (err) { next(err); }
 });
 
@@ -27,8 +34,8 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { rackId, item, color, size, qty, moduleType, moduleId } = req.body;
-    const result = await addItem({
-      rackId, item, color, size, qty, moduleType, moduleId,
+    const result = await addItem(req.org.id, {
+      rackId: Number(rackId), item, color, size, qty, moduleType, moduleId,
       userId: req.org.vastra_org_id,
     });
     res.status(201).json(result);
@@ -38,7 +45,7 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/item-locations/:id — update qty (0 removes). SRS §3.2
 router.patch('/:id', async (req, res, next) => {
   try {
-    const result = await updateItemQty({
+    const result = await updateItemQty(req.org.id, {
       id: Number(req.params.id), qty: req.body.qty, userId: req.org.vastra_org_id,
     });
     res.json(result);

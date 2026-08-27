@@ -11,13 +11,13 @@ router.get('/', async (req, res, next) => {
     const [rows] = action
       ? await pool.query(
           `SELECT id, entity_type, entity_id, action, before_json, after_json, user_id, created_at
-           FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT ?`,
-          [action, limit]
+           FROM audit_log WHERE fk_org_id = ? AND action = ? ORDER BY id DESC LIMIT ?`,
+          [req.org.id, action, limit]
         )
       : await pool.query(
           `SELECT id, entity_type, entity_id, action, before_json, after_json, user_id, created_at
-           FROM audit_log ORDER BY id DESC LIMIT ?`,
-          [limit]
+           FROM audit_log WHERE fk_org_id = ? ORDER BY id DESC LIMIT ?`,
+          [req.org.id, limit]
         );
     res.json(rows);
   } catch (err) { next(err); }

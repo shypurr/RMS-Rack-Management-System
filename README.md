@@ -18,11 +18,16 @@ guard, atomic moves, and a full audit trail.
 
 ## Run
 
+> ⚠️ **`npm run seed` erases all racks, stock and history.** Run it once when setting up a
+> new database, and never again on one that holds real organizations — it drops and
+> recreates those tables every time it runs. Logins and picklist history survive
+> (they live in `auth.sql` / `picklist.sql`, applied at boot); racks and stock do not.
+
 ```bash
 # 1. Backend
 cd server
 npm install
-npm run seed        # creates DB `rms`, applies schema, loads the full demo dataset
+npm run seed        # FIRST TIME ONLY — creates DB `rms`, applies schema, loads demo data
 npm run dev         # http://localhost:4000
 
 # 2. Frontend (new terminal)
@@ -284,7 +289,9 @@ the route files needs a tenancy filter. That is a separate migration.
 
 ## Sample data
 `npm run seed` drops and rebuilds the schema, then loads a demo warehouse so every screen has
-something to show. It is idempotent — re-run it any time to get back to a clean state.
+something to show. Re-run it on a **development** database any time to get back to a clean
+state — never on one with real organizations in it, because "clean" means their racks, stock
+and history are gone.
 
 | Table | Rows | Shape |
 |-------|------|-------|
@@ -552,12 +559,22 @@ curl -s https://<your-app>.onrender.com/api/health
 
 | `code` | Meaning | Fix |
 |--------|---------|-----|
-| `ENOTFOUND` | Hostname doesn't resolve — the DB server no longer exists, or `DB_HOST` is wrong. Managed free tiers (Aiven, Railway, PlanetScale) delete expired instances and remove their DNS record. | Provision a new DB, update the host env vars, re-run the seed |
+| `ENOTFOUND` | Hostname doesn't resolve — the DB server no longer exists, or `DB_HOST` is wrong. Managed free tiers (Aiven, Railway, PlanetScale) delete expired instances and remove their DNS record. | Provision a new DB, update the host env vars, then seed it — see the ⚠️ note under this table before you do |
 | `ECONNREFUSED` | Host resolves, nothing listening | Start MySQL / check `DB_PORT` |
 | `ER_ACCESS_DENIED_ERROR` | Bad credentials | Check `DB_USER` / `DB_PASSWORD` |
-| `ER_BAD_DB_ERROR` | Database missing | `npm run seed` |
+| `ER_BAD_DB_ERROR` | Database missing | `npm run seed` — see the ⚠️ note under this table first |
 | `HANDSHAKE_SSL_ERROR` | TLS handshake failed. Managed hosts refuse plaintext connections | Set `DB_SSL=true`, and `DB_CA` to the provider's CA cert for full verification |
 | `ETIMEDOUT` | Host never answered — firewall or IP allow-list | Allow the Render outbound IPs in the DB provider's dashboard |
+
+> ⚠️ **Two of those fixes involve `npm run seed`, which erases all racks, stock and history.**
+> That is fine on a fresh or development database and catastrophic on a live one. If the
+> database already holds real organizations, do **not** seed it. Create the missing tables by
+> hand from `migrations/schema.sql` instead: run only its `CREATE TABLE` statements and skip
+> the `DROP TABLE` block at the top. Same result, nothing destroyed.
+>
+> You are most likely reading this row while something is already broken, which is exactly
+> when the wrong command gets run. Check which database `DB_NAME` / `DB_HOST` point at before
+> you type anything.
 
 Confirm whether a hostname is really gone with `dig +short @8.8.8.8 <host>` — empty output
 means NXDOMAIN, i.e. the instance is deleted, not merely down.

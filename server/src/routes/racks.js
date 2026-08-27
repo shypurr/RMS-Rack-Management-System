@@ -1,39 +1,27 @@
 import { Router } from 'express';
-import { pool } from '../db.js';
-import { listRacks, getRackWithItems, HttpError } from '../services/rackService.js';
+import { listRacks, getRackWithItems } from '../services/rackService.js';
 
 const router = Router();
 
-// GET /api/racks — rack master list with used/available/status
+// GET /api/racks — this organization's bins with used/available/status
 router.get('/', async (req, res, next) => {
   try {
-    res.json(await listRacks(pool));
+    res.json(await listRacks(req.org.id));
   } catch (err) { next(err); }
 });
 
-// GET /api/racks/:id — one rack + its items (rack-wise report, SRS §3.4)
+// GET /api/racks/:id — one bin + its items (rack-wise report, SRS §3.4).
+// `:id` is the numeric rack_master.id, not the display code: codes re-pad when
+// the organization grows, so they cannot address a row.
 router.get('/:id', async (req, res, next) => {
   try {
-    res.json(await getRackWithItems(pool, req.params.id));
+    res.json(await getRackWithItems(req.org.id, Number(req.params.id)));
   } catch (err) { next(err); }
 });
 
-// POST /api/racks — create/maintain a rack master row
-router.post('/', async (req, res, next) => {
-  try {
-    const { rackId, capacity } = req.body;
-    if (!rackId || !Number.isInteger(Number(capacity)) || Number(capacity) <= 0) {
-      throw new HttpError(400, 'rackId and a positive integer capacity are required');
-    }
-    await pool.query(
-      `INSERT INTO rack_master (rack_id, capacity, used, status) VALUES (?, ?, 0, 'Vacant')`,
-      [rackId, Number(capacity)]
-    );
-    res.status(201).json({ rack_id: rackId, capacity: Number(capacity), used: 0, available: Number(capacity), status: 'Vacant' });
-  } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') return next(new HttpError(409, `Rack ${req.body.rackId} already exists`));
-    next(err);
-  }
-});
+// Racks are no longer created one at a time — they are generated from the
+// organization's layout at /api/layout/apply. POST /api/racks is gone
+// deliberately; a lone rack outside the configured grid would be invisible to
+// the next layout change and then silently deleted by it.
 
 export default router;

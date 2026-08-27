@@ -20,10 +20,10 @@ router.get('/putaway', async (req, res, next) => {
     const [rows] = await pool.query(
       `SELECT id, entity_id, before_json, after_json, user_id, created_at
        FROM audit_log
-       WHERE entity_type = 'item_location' AND action = 'add'
+       WHERE fk_org_id = ? AND entity_type = 'item_location' AND action = 'add'
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
-      [limit]
+      [req.org.id, limit]
     );
     res.json(rows.map((r) => {
       const a = r.after_json || {};
@@ -40,7 +40,7 @@ router.get('/putaway', async (req, res, next) => {
         qty: added,
         rack_qty: Number(a.qty ?? 0),   // what the rack held afterwards
         merged: !!b,
-        rack_id: a.fk_rack_id ?? '',
+        rack_id: a.rack_id ?? '',
         module_type: a.module_type ?? null,
         module_id: a.module_id ?? null,
         user_id: r.user_id,
@@ -54,7 +54,7 @@ router.get('/putaway', async (req, res, next) => {
 // its racks were ever updated.
 router.get('/picklists', async (req, res, next) => {
   try {
-    res.json(await listPicklists(clampLimit(req.query.limit)));
+    res.json(await listPicklists(req.org.id, clampLimit(req.query.limit)));
   } catch (err) { next(err); }
 });
 

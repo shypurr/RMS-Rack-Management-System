@@ -43,8 +43,16 @@ export const api = {
   qrCancel: (id, secret) => request('/auth/qr/cancel', { method: 'POST', body: { id, secret } }),
 
   listRacks: () => request('/racks'),
-  getRack: (id) => request(`/racks/${encodeURIComponent(id)}`),
-  createRack: (rackId, capacity) => request('/racks', { method: 'POST', body: { rackId, capacity } }),
+  // `id` is the numeric rack_master.id, not the display code — codes re-pad
+  // when the organization grows, so they cannot address a row.
+  getRack: (id) => request(`/racks/${id}`),
+
+  // Rack layout (setup screen). `preview` writes nothing; `apply` carries the
+  // version preview returned, so a layout edited in another tab is rejected
+  // rather than silently clobbered.
+  layout: () => request('/layout'),
+  layoutPreview: (body) => request('/layout/preview', { method: 'POST', body }),
+  layoutApply: (body) => request('/layout/apply', { method: 'POST', body }),
 
   addItem: (payload) => request('/item-locations', { method: 'POST', body: payload }),
   findPlacements: (item, color = '', size = '') =>

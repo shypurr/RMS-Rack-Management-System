@@ -18,6 +18,42 @@ import { buildChallans, CHALLAN_COLUMNS, PICK_MODULE, PICK_PREFIX } from './chal
 const REPLACE = process.argv.includes('--replace');
 const count = Number(process.argv.find((a) => /^\d+$/.test(a))) || 14;
 
+// source_transaction is org-scoped, so these challans need an owner. Passing
+// --org=<vastra_org_id> names one explicitly; without it the script uses the
+// only organization that actually has stock, and refuses to guess when more
+// than one does.
+const orgFlag = process.argv.find((a) => a.startsWith('--org='));
+const VASTRA_ORG_ID = orgFlag ? orgFlag.slice('--org='.length) : null;
+
+async function resolveOrg() {
+  if (VASTRA_ORG_ID) {
+    const [[org]] = await pool.query(
+      'SELECT id, name FROM organization WHERE vastra_org_id = ?', [VASTRA_ORG_ID]
+    );
+    if (!org) {
+      console.error(`No organization with vastra_org_id "${VASTRA_ORG_ID}".`);
+      process.exit(1);
+    }
+    return org;
+  }
+  const [orgs] = await pool.query(
+    `SELECT o.id, o.name, COUNT(il.id) AS stock
+     FROM organization o JOIN item_location il ON il.fk_org_id = o.id
+     GROUP BY o.id ORDER BY stock DESC`
+  );
+  if (!orgs.length) {
+    console.error('No organization has any stock. Put some away first, then re-run.');
+    process.exit(1);
+  }
+  if (orgs.length > 1) {
+    console.error('More than one organization has stock:');
+    for (const o of orgs) console.error(`  - ${o.name} (${o.stock} stock rows)`);
+    console.error('Re-run with --org=<vastra_org_id> to say which one.');
+    process.exit(1);
+  }
+  return orgs[0];
+}
+
 // The challan columns and the ENUM member arrived with the picklist feature, so
 // a database seeded before it needs bringing up to date. Both are additive and
 // safe to re-run.
@@ -50,8 +86,12 @@ async function ensureSchema() {
   }
 }
 
+const ORG = await resolveOrg();
+
 const [rows] = await pool.query(
-  'SELECT item, color, size, SUM(qty) AS qty FROM item_location GROUP BY item, color, size'
+  `SELECT item, color, size, SUM(qty) AS qty FROM item_location
+   WHERE fk_org_id = ? GROUP BY item, color, size`,
+  [ORG.id]
 );
 
 if (!rows.length) {
@@ -63,14 +103,17 @@ console.log(`Stock: ${rows.length} distinct item/colour/size combinations.`);
 await ensureSchema();
 
 if (REPLACE) {
-  const [res] = await pool.query('DELETE FROM source_transaction WHERE module_type = ?', [PICK_MODULE]);
+  const [res] = await pool.query(
+    'DELETE FROM source_transaction WHERE module_type = ? AND fk_org_id = ?',
+    [PICK_MODULE, ORG.id]
+  );
   console.log(`  - removed ${res.affectedRows} existing challan lines`);
 }
 
 // Continue the numbering rather than colliding with challans already there.
 const [[{ last }]] = await pool.query(
-  'SELECT MAX(id) AS last FROM source_transaction WHERE module_type = ?',
-  [PICK_MODULE]
+  'SELECT MAX(id) AS last FROM source_transaction WHERE module_type = ? AND fk_org_id = ?',
+  [PICK_MODULE, ORG.id]
 );
 const startAt = last ? Number(String(last).split('#')[0].split('-').pop()) + 1 : 1;
 
@@ -79,7 +122,10 @@ if (!lines.length) {
   console.error('Could not build any challans from the current stock.');
   process.exit(1);
 }
-await pool.query(`INSERT INTO source_transaction ${CHALLAN_COLUMNS} VALUES ?`, [lines]);
+await pool.query(
+  `INSERT INTO source_transaction ${CHALLAN_COLUMNS} VALUES ?`,
+  [lines.map((l) => [ORG.id, ...l])]
+);
 
 // Report what was made, so it is obvious the size runs are there.
 const docs = new Map();

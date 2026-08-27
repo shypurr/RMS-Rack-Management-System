@@ -7,6 +7,7 @@ const NAV = [
   { section: 'Main Menu' },
   { to: '/', icon: 'gauge-high', label: 'Dashboard', end: true },
   { to: '/racks', icon: 'layer-group', label: 'Rack Management' },
+  { to: '/setup', icon: 'sliders', label: 'Rack Setup' },
   { to: '/items', icon: 'box', label: 'Item Management' },
   { to: '/add', icon: 'truck-ramp-box', label: 'Putaway' },
   { to: '/picklist', icon: 'clipboard-list', label: 'Picklist' },
@@ -50,6 +51,11 @@ export default function Layout() {
         <div className="logo">
           <div className="logo-icon"><i className="fa-solid fa-warehouse" /></div>
           <div className="logo-text">Vastra<span>WMS</span></div>
+          <div
+            className={`theme-toggle ${theme === 'dark' ? 'on' : ''}`}
+            onClick={toggle}
+            title="Toggle Dark Mode"
+          />
         </div>
         <nav className="sidebar-nav">
           {NAV.map((n, i) =>
@@ -76,32 +82,21 @@ export default function Layout() {
               <div className="sidebar-user-name">{orgName}</div>
               <div className="sidebar-user-role">Vastra account</div>
             </div>
+            <div className="sidebar-icon-btn" title="Log out" onClick={logout}>
+              <i className="fa-solid fa-right-from-bracket" />
+            </div>
+          </div>
+          <div className="sidebar-collapse" onClick={onToggle} title={collapsed ? 'Expand menu' : 'Collapse menu'}>
+            <i className={`fa-solid fa-angles-${collapsed ? 'right' : 'left'}`} />
+            <span className="nav-label">Collapse</span>
           </div>
         </div>
       </aside>
 
-      <div className={`main-content ${collapsed ? 'expanded' : ''}`}>
-        <header className="topbar">
-          <div className="topbar-toggle" onClick={onToggle}><i className="fa-solid fa-bars" /></div>
-          <div className="topbar-actions">
-            <div className="topbar-btn" title="Full Screen"
-              onClick={() => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())}>
-              <i className="fa-solid fa-expand" />
-            </div>
-            <div className={`theme-toggle ${theme === 'dark' ? 'on' : ''}`} onClick={toggle} title="Toggle Dark Mode" />
-            <div className="topbar-user">
-              <div className="topbar-avatar">{initials}</div>
-              <div className="topbar-user-info">
-                <div className="topbar-user-name">{orgName}</div>
-                <div className="topbar-user-role">Vastra account</div>
-              </div>
-            </div>
-            <div className="topbar-btn" title="Log out" onClick={logout}>
-              <i className="fa-solid fa-right-from-bracket" />
-            </div>
-          </div>
-        </header>
+      {/* The sidebar slides off-screen on mobile, so its opener has to live outside it. */}
+      <div className="mobile-menu-btn" onClick={onToggle} title="Menu"><i className="fa-solid fa-bars" /></div>
 
+      <div className={`main-content ${collapsed ? 'expanded' : ''}`}>
         <main className="page-content">
           <Outlet />
         </main>

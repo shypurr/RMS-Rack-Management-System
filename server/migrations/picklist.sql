@@ -12,6 +12,7 @@
 
 CREATE TABLE IF NOT EXISTS picklist (
   id            BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  fk_org_id     INT NOT NULL,
   -- Optional: the challan already exists in the Vastra app, so the number is
   -- only recorded if the user chose to type it (or the module supplied it).
   dc_no         VARCHAR(60) NULL,
@@ -26,8 +27,11 @@ CREATE TABLE IF NOT EXISTS picklist (
   user_id       VARCHAR(60) NOT NULL DEFAULT 'system',
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_picklist_org FOREIGN KEY (fk_org_id)
+    REFERENCES organization(id) ON DELETE CASCADE,
   INDEX idx_picklist_created (created_at),
-  INDEX idx_picklist_updated (rack_updated)
+  INDEX idx_picklist_updated (rack_updated),
+  INDEX idx_picklist_org (fk_org_id, created_at)
 ) ENGINE=InnoDB;
 
 -- Line snapshot, kept as plain text rather than a foreign key into

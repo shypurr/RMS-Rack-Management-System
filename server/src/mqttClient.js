@@ -64,10 +64,31 @@ function connect() {
   // Errors here are transport-level (auth rejected, host unreachable). mqtt.js
   // keeps retrying on its own; log and let it. Without this listener the
   // 'error' event would be unhandled and take the process down.
-  client.on('error', (err) => console.error(`MQTT error (${redactedUrl()}):`, err.message));
+  client.on('error', (err) => {
+    console.error(`MQTT error (${redactedUrl()}):`, err.message);
+    explainSchemeMismatch(err);
+  });
   client.on('close', () => console.warn('MQTT connection closed — reconnecting'));
 
   return client;
+}
+
+// Vastra documents their broker as `tcp://13.235.138.204:1884`, but 1884 is a
+// WebSocket listener — raw TCP there gets an HTTP response, which mqtt.js tries
+// to parse as an MQTT packet and reports as a malformed-packet error. The raw
+// error names neither the URL nor the fix, so translate it once here rather
+// than let the next person lose an afternoon to it.
+let schemeHintShown = false;
+function explainSchemeMismatch(err) {
+  if (schemeHintShown) return; // reconnects would repeat this every few seconds
+  const looksLikeHttpReply = /Invalid header flag bits|Invalid supported/i.test(err?.message || '');
+  const usingRawTcp = /^(tcp|mqtt):/i.test(URL_);
+  if (!looksLikeHttpReply || !usingRawTcp) return;
+  schemeHintShown = true;
+  console.error('    ↳ That port speaks WebSocket, not raw TCP. In server/.env change');
+  console.error(`      MQTT_URL=${URL_}`);
+  console.error(`      to      ${URL_.replace(/^(tcp|mqtt):/i, 'ws:')}`);
+  console.error('      (or use the raw-TCP listener on port 1883 — same message bus)');
 }
 
 // Host only — MQTT_URL can carry credentials in its userinfo section.

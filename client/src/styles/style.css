@@ -79,6 +79,7 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .sidebar.collapsed .nav-label,
 .sidebar.collapsed .sidebar-section-title,
 .sidebar.collapsed .logo-text,
+.sidebar.collapsed .sidebar-user-info,
 .sidebar.collapsed .sidebar-badge { display: none; }
 .sidebar.collapsed .logo { justify-content: center; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 12px; }
@@ -99,6 +100,11 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 }
 .logo-text { color: #fff; font-size: 15px; font-weight: 600; white-space: nowrap; }
 .logo-text span { color: var(--primary); }
+.logo .theme-toggle { margin-left: auto; flex-shrink: 0; background: rgba(255,255,255,.18); }
+.logo .theme-toggle.on { background: var(--primary); }
+/* Collapsed to icons, the logo row stacks so the toggle stays reachable. */
+.sidebar.collapsed .logo { flex-direction: column; gap: 10px; padding: 16px 8px; }
+.sidebar.collapsed .logo .theme-toggle { margin-left: 0; }
 
 .sidebar-nav { flex: 1; overflow-y: auto; padding: 8px 0; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.1) transparent; }
 .sidebar-section-title {
@@ -165,9 +171,33 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0;
 }
-.sidebar-user-info { min-width: 0; }
+.sidebar-user-info { min-width: 0; flex: 1; }
 .sidebar-user-name { color: #fff; font-size: 12.5px; font-weight: 500; }
 .sidebar-user-role { color: rgba(255,255,255,.4); font-size: 11px; }
+.sidebar-icon-btn {
+  width: 30px; height: 30px;
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,.5);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+.sidebar-icon-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
+.sidebar-collapse {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px;
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  color: rgba(255,255,255,.5);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.sidebar-collapse:hover { background: var(--sidebar-hover); color: #fff; }
+.sidebar.collapsed .sidebar-user { justify-content: center; padding: 8px 0; }
+.sidebar.collapsed .sidebar-icon-btn { display: none; }
+.sidebar.collapsed .sidebar-collapse { justify-content: center; }
 
 /* ── Main Content ────────────────────────────────────────────────────────── */
 .main-content {
@@ -180,107 +210,8 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 }
 .main-content.expanded { margin-left: 64px; }
 
-/* ── Topbar ──────────────────────────────────────────────────────────────── */
-.topbar {
-  height: var(--topbar-h);
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center;
-  padding: 0 24px;
-  position: sticky; top: 0;
-  z-index: 100;
-  gap: 12px;
-  box-shadow: var(--shadow-sm);
-}
-.topbar-toggle {
-  width: 36px; height: 36px;
-  border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition);
-  flex-shrink: 0;
-}
-.topbar-toggle:hover { background: var(--bg); color: var(--primary); }
-
-.warehouse-selector {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  background: var(--bg);
-  color: var(--text-primary);
-  font-size: 13px;
-  min-width: 160px;
-  transition: border-color var(--transition);
-}
-.warehouse-selector:hover { border-color: var(--primary); }
-.warehouse-selector i { color: var(--primary); }
-
-.topbar-search {
-  flex: 1;
-  max-width: 400px;
-  position: relative;
-}
-.topbar-search input {
-  width: 100%;
-  padding: 8px 12px 8px 36px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  transition: all var(--transition);
-}
-.topbar-search input:focus { border-color: var(--primary); background: var(--card-bg); box-shadow: 0 0 0 3px var(--primary-alpha); }
-.topbar-search .search-icon {
-  position: absolute; left: 10px; top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-muted); pointer-events: none;
-}
-
-.topbar-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.topbar-btn {
-  width: 36px; height: 36px;
-  border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition);
-  position: relative;
-}
-.topbar-btn:hover { background: var(--bg); color: var(--primary); }
-.notif-badge {
-  position: absolute; top: 4px; right: 4px;
-  background: var(--danger);
-  color: #fff; font-size: 9px; font-weight: 700;
-  border-radius: 50%;
-  width: 14px; height: 14px;
-  display: flex; align-items: center; justify-content: center;
-  border: 2px solid var(--card-bg);
-}
-
-.topbar-user {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--transition);
-  margin-left: 4px;
-}
-.topbar-user:hover { background: var(--bg); }
-.topbar-avatar {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  background: var(--primary);
-  display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 12px; font-weight: 700;
-}
-.topbar-user-info { line-height: 1.3; }
-.topbar-user-name { font-size: 13px; font-weight: 600; }
-.topbar-user-role { font-size: 11px; color: var(--text-muted); }
+/* Opens the sidebar on mobile, where the sidebar itself is off-screen. */
+.mobile-menu-btn { display: none; }
 
 /* ── Page Content ────────────────────────────────────────────────────────── */
 .page-content {

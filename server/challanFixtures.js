@@ -19,7 +19,7 @@ export const PICK_MODULE = 'Delivery Challan';
 export const PICK_PREFIX = 'DC';
 
 // Column order of every row this module returns.
-export const CHALLAN_COLUMNS = '(id, module_type, item, color, size, qty, party, doc_date)';
+export const CHALLAN_COLUMNS = '(fk_org_id, id, module_type, item, color, size, qty, party, doc_date)';
 
 const PARTIES = [
   'Keshav Textiles', 'Janki Fashion House', 'Manoj Traders', 'Ramesh Exports',

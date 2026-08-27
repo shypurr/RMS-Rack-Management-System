@@ -14,6 +14,7 @@ import picklist from './routes/picklist.js';
 import history from './routes/history.js';
 import auditLog from './routes/audit.js';
 import dashboard from './routes/dashboard.js';
+import layout from './routes/layout.js';
 
 export function createApp() {
   const app = express();
@@ -39,6 +40,7 @@ export function createApp() {
   app.use('/api/auth', auth);
 
   // Everything else needs a session.
+  app.use('/api/layout', requireAuth, layout);
   app.use('/api/dashboard', requireAuth, dashboard);
   app.use('/api/racks', requireAuth, racks);
   app.use('/api/item-locations', requireAuth, itemLocations);
@@ -73,7 +75,11 @@ export function createApp() {
     }
     const status = err.status || 500;
     if (status === 500) console.error(err);
-    res.status(status).json({ error: err.message || 'Internal error' });
+    // Layout refusals carry the exact bins standing in the way; the setup
+    // screen renders them so the user knows what to move.
+    const body = { error: err.message || 'Internal error' };
+    if (err.blockers) body.blockers = err.blockers;
+    res.status(status).json(body);
   });
 
   return app;

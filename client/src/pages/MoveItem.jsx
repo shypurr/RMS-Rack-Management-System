@@ -15,7 +15,8 @@ export default function MoveItem() {
   const [placements, setPlacements] = useState([]); // racks holding the chosen variant
   const [source, setSource] = useState(null);  // chosen placement { id, rack_id, qty, available }
   const [qty, setQty] = useState(1);
-  const [toRackId, setToRackId] = useState('');
+  // Numeric rack_master.id; the combobox shows rack_id, the derived code.
+  const [toRackId, setToRackId] = useState(null);
 
   const loadRacks = () => api.listRacks().then(setRacks).catch((e) => toast(e.message, 'error'));
   const loadItems = () => api.listItems().then(setItems).catch((e) => toast(e.message, 'error'));
@@ -42,25 +43,25 @@ export default function MoveItem() {
 
   // When a variant is chosen, find every rack that holds it.
   const chooseVariant = async (v) => {
-    setVariant(v); setSource(null); setToRackId(''); setQty(1); setPlacements([]);
+    setVariant(v); setSource(null); setToRackId(null); setQty(1); setPlacements([]);
     try {
       setPlacements(await api.findPlacements(v.item, v.color, v.size));
     } catch (e) { toast(e.message, 'error'); }
   };
 
-  const chooseSource = (p) => { setSource(p); setQty(1); setToRackId(''); };
+  const chooseSource = (p) => { setSource(p); setQty(1); setToRackId(null); };
 
-  const destCandidates = sortByEmptiness(racks.filter((r) => r.rack_id !== source?.rack_id));
-  const destRack = racks.find((r) => r.rack_id === toRackId);
+  const destCandidates = sortByEmptiness(racks.filter((r) => r.id !== source?.fk_rack_id));
+  const destRack = racks.find((r) => r.id === toRackId);
 
-  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(''); setQty(1); setSearch(''); };
+  const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(null); setQty(1); setSearch(''); };
 
   const doMove = async () => {
     if (!source || !toRackId) return toast('Pick a source rack and a destination', 'warning');
     if (qty <= 0 || qty > source.qty) return toast(`Quantity must be 1–${source.qty}`, 'warning');
     try {
       await api.move(source.id, toRackId, Number(qty));
-      toast(`Moved ${qty} × ${variant.item} → ${toRackId}`, 'success');
+      toast(`Moved ${qty} × ${variant.item} → ${destRack?.rack_id ?? 'rack'}`, 'success');
       await Promise.all([loadRacks(), loadItems()]);
       reset();
     } catch (e) { toast(e.message, 'error'); }
@@ -173,7 +174,7 @@ export default function MoveItem() {
               )}
             </div>
             <button className="btn btn-primary mt-4" onClick={doMove} disabled={!toRackId}>
-              <i className="fa-solid fa-check" /> Move {qty} × {variant.item} → {toRackId || 'rack'}
+              <i className="fa-solid fa-check" /> Move {qty} × {variant.item} → {destRack?.rack_id || 'rack'}
             </button>
           </div>
         </div>
@@ -207,7 +208,7 @@ function RackCombobox({ candidates, value, onChange }) {
   const q = query.trim().toLowerCase();
   const rackMatches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
 
-  const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.rack_id); };
+  const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.id); };
   const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
 
   return (
@@ -223,7 +224,7 @@ function RackCombobox({ candidates, value, onChange }) {
       {open && (
         <div className="txn-dropdown">
           {rackMatches.length ? rackMatches.map((r) => (
-            <div key={r.rack_id} className="txn-option" onMouseDown={() => choose(r)}>
+            <div key={r.id} className="txn-option" onMouseDown={() => choose(r)}>
               <span className="font-600 text-primary-color">{r.rack_id}</span>
               <span className="text-sm text-muted">&nbsp; {r.available} free{r.status === 'Vacant' ? ' · empty' : ''}</span>
             </div>

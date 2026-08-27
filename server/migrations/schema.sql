@@ -1,5 +1,13 @@
 -- Rack Management System — schema (MySQL / InnoDB)
 -- Applied by seed.js. Safe to re-run: drops and recreates.
+--
+-- WARNING: this file DROPS item_location and audit_log. Once real organizations
+-- own rows in them, `npm run seed` destroys customer data. See the warning in
+-- README.md under "Run" before running the seed against anything real.
+--
+-- ORDERING: every table here has a foreign key to `organization`, which lives in
+-- auth.sql. seed.js therefore applies the standing migrations FIRST — without
+-- that, these CREATE statements fail with errno 150.
 
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS audit_log;
@@ -8,39 +16,55 @@ DROP TABLE IF EXISTS source_transaction;
 DROP TABLE IF EXISTS rack_master;
 SET FOREIGN_KEY_CHECKS = 1;
 
--- Master record of every physical rack/bin location.
--- `used` is kept in sync by the app (= SUM of item_location.qty for the rack).
--- `status` is derived: Vacant when used = 0, else Occupied.
+-- One row per BIN. `id` is the identity and never changes; the human-readable
+-- code (R001-S01-B01) is derived from the three integers at read time by
+-- src/lib/rackCode.js, so an org growing past a digit boundary re-pads its
+-- labels without renaming anything.
 CREATE TABLE rack_master (
-  rack_id   VARCHAR(20) NOT NULL PRIMARY KEY,          -- R{n}-S{n}-B{n}, e.g. R05-S02-B04
+  id        BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  fk_org_id INT NOT NULL,
+  rack_no   INT NOT NULL,
+  shelf_no  INT NOT NULL,
+  bin_no    INT NOT NULL,
   capacity  INT NOT NULL,
   used      INT NOT NULL DEFAULT 0,
   status    ENUM('Vacant','Occupied') NOT NULL DEFAULT 'Vacant',
   CONSTRAINT chk_used_nonneg CHECK (used >= 0),
-  CONSTRAINT chk_used_capacity CHECK (used <= capacity)
+  CONSTRAINT chk_used_capacity CHECK (used <= capacity),
+  CONSTRAINT fk_rack_org FOREIGN KEY (fk_org_id)
+    REFERENCES organization(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_rack_bin (fk_org_id, rack_no, shelf_no, bin_no)
 ) ENGINE=InnoDB;
 
--- Each item's placement. Many rows may share one rack (shared capacity pool).
+-- Each item's placement. Many rows may share one bin (shared capacity pool).
 CREATE TABLE item_location (
   id          BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  fk_org_id   INT NOT NULL,
   item        VARCHAR(120) NOT NULL,
   color       VARCHAR(60)  NOT NULL DEFAULT '',
   size        VARCHAR(60)  NOT NULL DEFAULT '',
   qty         INT NOT NULL,
-  fk_rack_id  VARCHAR(20) NOT NULL,
+  fk_rack_id  BIGINT NOT NULL,
   module_id   VARCHAR(60)  NULL,
   module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return') NULL,
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT chk_qty_pos CHECK (qty > 0),
   CONSTRAINT fk_item_rack FOREIGN KEY (fk_rack_id)
-    REFERENCES rack_master(rack_id) ON UPDATE CASCADE,
-  INDEX idx_item_rack (fk_rack_id)
+    REFERENCES rack_master(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_item_org FOREIGN KEY (fk_org_id)
+    REFERENCES organization(id) ON DELETE CASCADE,
+  INDEX idx_item_rack (fk_rack_id),
+  INDEX idx_item_org (fk_org_id)
 ) ENGINE=InnoDB;
 
 -- Append-only change history: who / when / before / after.
+-- `user_id` is kept alongside fk_org_id on purpose: fk_org_id is the tenancy
+-- filter, user_id is the ACTOR. They hold the same value today only because
+-- Vastra gives us no per-person identity yet.
 CREATE TABLE audit_log (
   id          BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  fk_org_id   INT NOT NULL,
   entity_type ENUM('rack','item_location') NOT NULL,
   entity_id   VARCHAR(60) NOT NULL,
   action      ENUM('add','update','move','remove') NOT NULL,
@@ -48,27 +72,28 @@ CREATE TABLE audit_log (
   after_json  JSON NULL,
   user_id     VARCHAR(60) NOT NULL DEFAULT 'system',
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_audit_entity (entity_type, entity_id)
+  CONSTRAINT fk_audit_org FOREIGN KEY (fk_org_id)
+    REFERENCES organization(id) ON DELETE CASCADE,
+  INDEX idx_audit_entity (entity_type, entity_id),
+  INDEX idx_audit_org_created (fk_org_id, created_at)
 ) ENGINE=InnoDB;
 
--- Stub for Vastra source modules until real integration.
--- Feeds Flow A auto-fill (Purchase Inward / Job Slip / Pack Design / Sales Return)
--- and Flow C picking (Delivery Challan). Delivery Challan is outbound, so it is
--- NOT in item_location.module_type above — a challan removes stock, it never
--- becomes the provenance of stored stock.
--- A stub challan spans several rows (`DC-2026-0007#1`, `#2`…) because `id` is
--- the primary key; the picklist route groups on the part before the `#`.
+-- Dev stub for Vastra source modules. Org-scoped like everything else; seeded
+-- only when `npm run seed -- --org=<vastra_org_id>` names an owner. In
+-- production USE_VASTRA_MODULES=true bypasses this table entirely and Vastra
+-- scopes the data by access token.
 CREATE TABLE source_transaction (
-  id          VARCHAR(60) NOT NULL PRIMARY KEY,
+  id          VARCHAR(60) NOT NULL,
+  fk_org_id   INT NOT NULL,
   module_type ENUM('Purchase Inward','Job Slip','Pack Design','Sales Return','Delivery Challan') NOT NULL,
   item        VARCHAR(120) NOT NULL,
   color       VARCHAR(60) NOT NULL DEFAULT '',
   size        VARCHAR(60) NOT NULL DEFAULT '',
   qty         INT NOT NULL,
-  -- Document-level fields, repeated on every line of the same document (the
-  -- live Vastra rows carry them the same way, off the master). Only the
-  -- challan feed reads them; inbound stub rows leave them at their defaults.
   party       VARCHAR(120) NOT NULL DEFAULT '',
   doc_date    DATE NULL,
-  INDEX idx_src_module (module_type)
+  PRIMARY KEY (fk_org_id, id),
+  CONSTRAINT fk_src_org FOREIGN KEY (fk_org_id)
+    REFERENCES organization(id) ON DELETE CASCADE,
+  INDEX idx_src_module (fk_org_id, module_type)
 ) ENGINE=InnoDB;

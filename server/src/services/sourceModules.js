@@ -74,12 +74,15 @@ async function fromVastra(org, { moduleType, q, limit }) {
   return q ? rows : rows.slice(0, limit);
 }
 
-async function fromStub({ moduleType, q, limit }) {
-  const where = [];
-  const params = [];
+async function fromStub(orgId, { moduleType, q, limit }) {
+  if (!orgId) throw new HttpError(500, 'fromStub requires an orgId');
+  // The org predicate is never optional here — the stub table is shared by
+  // every organization in the database.
+  const where = ['fk_org_id = ?'];
+  const params = [orgId];
   if (moduleType) { where.push('module_type = ?'); params.push(moduleType); }
   if (q) { where.push('id LIKE ?'); params.push(`%${q}%`); }
-  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const clause = `WHERE ${where.join(' AND ')}`;
   // With a search term, return every match; otherwise cap at `limit` latest.
   const cap = q ? '' : `LIMIT ${limit}`;
   // Aliased to `date` to match the live Vastra row shape, where the document
@@ -99,13 +102,16 @@ async function fromStub({ moduleType, q, limit }) {
 // which of the two flags applies.
 export async function fetchTransactions(org, { moduleType, q, limit = 10 }) {
   const live = moduleType === PICK_MODULE_TYPE ? USE_VASTRA_PICK : USE_VASTRA;
+  // The live branch needs no org filter of its own: it reads with this org's
+  // Vastra access token, so Vastra scopes the response. The stub branch is a
+  // shared local table and must filter explicitly.
   if (live) return fromVastra(org, { moduleType, q, limit });
   if (!moduleType) {
     // The stub table holds outbound challans too, so an unfiltered read has to
     // exclude them by hand — Vastra's fan-out above is already inbound-only.
-    const rows = await fromStub({ q, limit: limit * 4 });
+    const rows = await fromStub(org.id, { q, limit: limit * 4 });
     const inbound = rows.filter((r) => MODULE_TYPES.includes(r.module_type));
     return q ? inbound : inbound.slice(0, limit);
   }
-  return fromStub({ moduleType, q, limit });
+  return fromStub(org.id, { moduleType, q, limit });
 }

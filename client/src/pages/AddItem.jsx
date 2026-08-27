@@ -10,7 +10,9 @@ export default function AddItem() {
   const [mode, setMode] = useState('source'); // 'source' (Flow A) | 'manual' (Flow B)
   const [form, setForm] = useState(EMPTY);
   const [racks, setRacks] = useState([]);
-  const [rackId, setRackId] = useState('');
+  // Numeric rack_master.id. The label the user sees comes from rack_id on the
+  // rack row, which the server derives — a code cannot identify a row.
+  const [rackId, setRackId] = useState(null);
   const [rackSearch, setRackSearch] = useState('');
 
   // Flow A state
@@ -41,19 +43,19 @@ export default function AddItem() {
     setTxnResetKey((k) => k + 1);
   };
 
-  const selectedRack = racks.find((r) => r.rack_id === rackId);
+  const selectedRack = racks.find((r) => r.id === rackId);
 
   const save = async () => {
     if (!form.item || !form.qty || form.qty <= 0) return toast('Item and a positive quantity are required', 'warning');
     if (!rackId) return toast('Select a rack', 'warning');
     try {
       const res = await api.addItem({ rackId, ...form, qty: Number(form.qty) });
-      toast(`${form.item} × ${form.qty} added to ${rackId}`, 'success');
+      toast(`${form.item} × ${form.qty} added to ${selectedRack?.rack_id ?? 'rack'}`, 'success');
       setForm(mode === 'source' ? EMPTY : { ...EMPTY });
       setTxnResetKey((k) => k + 1);
-      setRackId('');
+      setRackId(null);
       // refresh rack availability
-      setRacks((rs) => rs.map((r) => (r.rack_id === res.rack.rack_id ? { ...r, used: res.rack.used, status: res.rack.status, available: r.capacity - res.rack.used } : r)));
+      setRacks((rs) => rs.map((r) => (r.id === res.rack.id ? { ...r, used: res.rack.used, status: res.rack.status, available: r.capacity - res.rack.used } : r)));
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -127,14 +129,14 @@ export default function AddItem() {
                 <div className="grid cols-2 gap-col-4">
                   {placements.map((p) => {
                     const noRoom = p.available < Number(form.qty || 0);
-                    const chosen = rackId === p.rack_id;
+                    const chosen = rackId === p.fk_rack_id;
                     return (
                       <div key={p.id} className="flex items-center gap-3 p-4" style={{ background: 'var(--bg)', borderRadius: 'var(--radius-md)', outline: chosen ? '2px solid var(--primary)' : 'none' }}>
                         <div style={{ flex: 1 }}>
                           <div className="font-700 text-primary-color">{p.rack_id}</div>
                           <div className="text-xs text-muted">has {p.qty} here · {p.available} free</div>
                         </div>
-                        <button className="btn btn-outline btn-sm" disabled={noRoom} onClick={() => setRackId(p.rack_id)}>
+                        <button className="btn btn-outline btn-sm" disabled={noRoom} onClick={() => setRackId(p.fk_rack_id)}>
                           {noRoom ? 'No room' : chosen ? 'Selected' : 'Add here'}
                         </button>
                       </div>
@@ -157,7 +159,7 @@ export default function AddItem() {
                 {rackOptions.map((r) => {
                   const p = pct(r.used, r.capacity);
                   return (
-                    <div key={r.rack_id} className={`rack-card ${occupancyBucket(r.used, r.capacity)}`} style={{ width: '100%', outline: rackId === r.rack_id ? '2px solid var(--primary)' : 'none' }} onClick={() => setRackId(r.rack_id)}>
+                    <div key={r.id} className={`rack-card ${occupancyBucket(r.used, r.capacity)}`} style={{ width: '100%', outline: rackId === r.id ? '2px solid var(--primary)' : 'none' }} onClick={() => setRackId(r.id)}>
                       <div className="rack-status-dot" />
                       <div className="rack-name">{r.rack_id}</div>
                       <div className="rack-pct">{r.available} free of {r.capacity}</div>
@@ -168,7 +170,7 @@ export default function AddItem() {
                 {!rackOptions.length && <p className="text-muted">No racks with available space.</p>}
               </div>
               <button className="btn btn-primary mt-4" onClick={save} disabled={!rackId || !form.item}>
-                <i className="fa-solid fa-check" /> Add to {rackId || 'rack'}
+                <i className="fa-solid fa-check" /> Add to {selectedRack?.rack_id || 'rack'}
               </button>
             </div>
           </div>
@@ -185,7 +187,7 @@ export default function AddItem() {
               <SummaryRow label="Qty" value={form.qty || '—'} />
               <SummaryRow label="Module" value={form.moduleType || '—'} />
               <hr className="divider" />
-              <SummaryRow label="Target rack" value={rackId || '—'} />
+              <SummaryRow label="Target rack" value={selectedRack?.rack_id || '—'} />
               {selectedRack && <SummaryRow label="After add" value={`${selectedRack.used + Number(form.qty || 0)}/${selectedRack.capacity}`} />}
             </div>
           </div>

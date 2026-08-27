@@ -52,6 +52,19 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Deliberately NOT gated like Putaway/Move/Picklist: for an org with no
+          racks, zeros are the truthful answer, not an error. Just point at the
+          fix. */}
+      {data?.stats?.totalRacks === 0 && (
+        <div className="card mb-4" style={{ borderLeft: '4px solid var(--primary)' }}>
+          <div className="card-body flex items-center gap-4" style={{ padding: '14px 20px' }}>
+            <i className="fa-solid fa-warehouse text-primary-color" />
+            <span className="text-sm">No racks configured yet — every number below will stay at zero.</span>
+            <Link className="btn btn-primary btn-sm ml-auto" to="/setup">Set up rack layout</Link>
+          </div>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div className="grid cols-6 gap-col-4 mb-6">
         <StatCard icon="boxes-stacked" color="blue"   value={fmt(s.totalItems)}    label="Total Items Stored" sub={`across ${s.totalRacks} racks`} />

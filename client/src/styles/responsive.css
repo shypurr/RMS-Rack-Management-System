@@ -18,11 +18,25 @@
   .main-content { margin-left: 0; }
   .main-content.expanded { margin-left: 0; }
 
-  .page-content { padding: 16px; }
-  .topbar { padding: 0 16px; }
-  .topbar-search { max-width: 200px; }
-  .topbar-user-info { display: none; }
-  .warehouse-selector { min-width: 120px; }
+  /* Leaves room for the floating menu button. */
+  .page-content { padding: 64px 16px 16px; }
+
+  .mobile-menu-btn {
+    display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 12px; left: 12px;
+    width: 40px; height: 40px;
+    border-radius: var(--radius-sm);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    z-index: 260;
+  }
+  .mobile-menu-btn:hover { color: var(--primary); }
+
+  /* The sidebar is a full overlay here — collapsing to icons makes no sense. */
+  .sidebar-collapse { display: none; }
 
   .cols-6, .cols-4, .cols-3 { grid-template-columns: repeat(2,1fr); }
   .cols-2 { grid-template-columns: 1fr; }
@@ -41,7 +55,6 @@
 
 /* Small mobile ≤ 480px */
 @media (max-width: 480px) {
-  .topbar-search { display: none; }
   .cols-6, .cols-4, .cols-3, .cols-2 { grid-template-columns: 1fr; }
   .modal { max-width: 100%; margin: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
   .modal-backdrop { align-items: flex-end; }
@@ -52,7 +65,7 @@
 
 /* Print */
 @media print {
-  .sidebar, .topbar, .topbar-actions, .btn:not(.print-show) { display: none !important; }
+  .sidebar, .mobile-menu-btn, .btn:not(.print-show) { display: none !important; }
   .main-content { margin-left: 0; }
   .page-content { padding: 0; }
   .card { box-shadow: none; border: 1px solid #ddd; }

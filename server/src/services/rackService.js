@@ -1,142 +1,172 @@
-import { withTransaction } from '../db.js';
+import { pool, withTransaction } from '../db.js';
 import { writeAudit } from './audit.js';
+import { getOrgWidths } from './layoutService.js';
+import { decorateRack, decorateRacks } from '../lib/rackCode.js';
+import { HttpError } from '../lib/httpError.js';
 
-// Simple typed error so routes can map to HTTP status codes.
-export class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
+// Moved to src/lib/httpError.js so layoutService can throw it without creating
+// an import cycle (this file needs getOrgWidths from layoutService). Still
+// re-exported here for the modules that already import it from this path.
+export { HttpError };
+
+// Every function here takes orgId FIRST and refuses to run without it. A
+// forgotten tenancy filter must fail loudly rather than quietly serve another
+// organization's stock — which is exactly the bug this replaced.
+function assertOrg(orgId, fn) {
+  if (!orgId) throw new HttpError(500, `${fn} requires an orgId`);
 }
 
 // ── low-level helpers (operate on a transaction connection) ────────────────
-async function getRackForUpdate(conn, rackId) {
+// The org predicate is in the WHERE clause, not checked after the fact: a rack
+// belonging to someone else must be indistinguishable from one that does not
+// exist, so probing ids leaks nothing.
+async function getRackForUpdate(conn, orgId, rackId) {
   const [rows] = await conn.query(
-    'SELECT rack_id, capacity, used, status FROM rack_master WHERE rack_id = ? FOR UPDATE',
-    [rackId]
+    `SELECT id, rack_no, shelf_no, bin_no, capacity, used, status
+     FROM rack_master WHERE id = ? AND fk_org_id = ? FOR UPDATE`,
+    [rackId, orgId]
   );
   if (!rows.length) throw new HttpError(404, `Rack ${rackId} not found`);
   return rows[0];
 }
 
-async function getItemForUpdate(conn, id) {
-  const [rows] = await conn.query('SELECT * FROM item_location WHERE id = ? FOR UPDATE', [id]);
+async function getItemForUpdate(conn, orgId, id) {
+  const [rows] = await conn.query(
+    'SELECT * FROM item_location WHERE id = ? AND fk_org_id = ? FOR UPDATE',
+    [id, orgId]
+  );
   if (!rows.length) throw new HttpError(404, `Item location ${id} not found`);
   return rows[0];
 }
 
 // Recompute used = SUM(qty) and derive status. Single source of truth for both.
-async function recalcRack(conn, rackId) {
+async function recalcRack(conn, orgId, rackId) {
   const [[row]] = await conn.query(
-    'SELECT COALESCE(SUM(qty),0) AS total FROM item_location WHERE fk_rack_id = ?',
-    [rackId]
+    'SELECT COALESCE(SUM(qty),0) AS total FROM item_location WHERE fk_rack_id = ? AND fk_org_id = ?',
+    [rackId, orgId]
   );
   const total = Number(row.total); // SUM() comes back as a string; coerce for the === 0 check
   const status = total === 0 ? 'Vacant' : 'Occupied';
-  await conn.query('UPDATE rack_master SET used = ?, status = ? WHERE rack_id = ?', [total, status, rackId]);
+  await conn.query(
+    'UPDATE rack_master SET used = ?, status = ? WHERE id = ? AND fk_org_id = ?',
+    [total, status, rackId, orgId]
+  );
   return { used: total, status };
 }
 
-// Guard: a rack's used may never exceed capacity.
-function assertCapacity(rack, projectedUsed) {
+// Guard: a rack's used may never exceed capacity. `code` is the display label,
+// which the caller derives — this module never invents one.
+function assertCapacity(rack, projectedUsed, code) {
   if (projectedUsed > rack.capacity) {
-    throw new HttpError(
-      409,
-      `Capacity exceeded for ${rack.rack_id}: ${projectedUsed}/${rack.capacity}`
-    );
+    throw new HttpError(409, `Capacity exceeded for ${code}: ${projectedUsed}/${rack.capacity}`);
   }
 }
 
 // ── read operations (no transaction needed) ───────────────────────────────
-export async function listRacks(pool) {
+export async function listRacks(orgId) {
+  assertOrg(orgId, 'listRacks');
   const [rows] = await pool.query(
-    `SELECT rack_id, capacity, used, (capacity - used) AS available, status
-     FROM rack_master ORDER BY rack_id`
+    `SELECT id, rack_no, shelf_no, bin_no, capacity, used, (capacity - used) AS available, status
+     FROM rack_master WHERE fk_org_id = ?
+     ORDER BY rack_no, shelf_no, bin_no`,
+    [orgId]
   );
-  return rows;
+  // Numeric ORDER BY, so R10 no longer sorts before R2 the way a string key did.
+  return decorateRacks(rows, await getOrgWidths(orgId));
 }
 
-export async function getRackWithItems(pool, rackId) {
+export async function getRackWithItems(orgId, rackId) {
+  assertOrg(orgId, 'getRackWithItems');
   const [rack] = await pool.query(
-    `SELECT rack_id, capacity, used, (capacity - used) AS available, status
-     FROM rack_master WHERE rack_id = ?`,
-    [rackId]
+    `SELECT id, rack_no, shelf_no, bin_no, capacity, used, (capacity - used) AS available, status
+     FROM rack_master WHERE id = ? AND fk_org_id = ?`,
+    [rackId, orgId]
   );
   if (!rack.length) throw new HttpError(404, `Rack ${rackId} not found`);
   const [items] = await pool.query(
     `SELECT id, item, color, size, qty, module_id, module_type, updated_at
-     FROM item_location WHERE fk_rack_id = ? ORDER BY item, color, size`,
-    [rackId]
+     FROM item_location WHERE fk_rack_id = ? AND fk_org_id = ? ORDER BY item, color, size`,
+    [rackId, orgId]
   );
-  return { ...rack[0], items };
+  return { ...decorateRack(rack[0], await getOrgWidths(orgId)), items };
 }
 
 // Find every rack that already holds this exact item (item + color + size),
 // with each rack's current free space — powers the "already placed" hint.
-export async function findPlacements(pool, { item, color = '', size = '' }) {
+export async function findPlacements(orgId, { item, color = '', size = '' }) {
+  assertOrg(orgId, 'findPlacements');
   if (!item) return [];
   const [rows] = await pool.query(
-    `SELECT il.id, il.fk_rack_id AS rack_id, il.qty,
+    `SELECT il.id, il.fk_rack_id, il.qty,
+            rm.rack_no, rm.shelf_no, rm.bin_no,
             rm.capacity, rm.used, (rm.capacity - rm.used) AS available
      FROM item_location il
-     JOIN rack_master rm ON rm.rack_id = il.fk_rack_id
-     WHERE il.item = ? AND il.color = ? AND il.size = ?
+     JOIN rack_master rm ON rm.id = il.fk_rack_id
+     WHERE il.fk_org_id = ? AND il.item = ? AND il.color = ? AND il.size = ?
      ORDER BY il.qty DESC`,
-    [item, color, size]
+    [orgId, item, color, size]
   );
-  return rows;
+  // `rack_id` stays the human code so the placement cards render unchanged;
+  // `fk_rack_id` is what the client sends back when choosing this rack.
+  return decorateRacks(rows, await getOrgWidths(orgId));
 }
 
 // ── write operations ──────────────────────────────────────────────────────
-export async function addItem({ rackId, item, color = '', size = '', qty, moduleType = null, moduleId = null, userId = 'system' }) {
+export async function addItem(orgId, { rackId, item, color = '', size = '', qty, moduleType = null, moduleId = null, userId = 'system' }) {
+  assertOrg(orgId, 'addItem');
   qty = Number(qty);
   if (!item || !Number.isInteger(qty) || qty <= 0) {
     throw new HttpError(400, 'item and a positive integer qty are required');
   }
+  const widths = await getOrgWidths(orgId);
   return withTransaction(async (conn) => {
-    const rack = await getRackForUpdate(conn, rackId);
-    assertCapacity(rack, rack.used + qty);
+    const rack = await getRackForUpdate(conn, orgId, rackId);
+    const code = decorateRack(rack, widths).rack_id;
+    assertCapacity(rack, rack.used + qty, code);
 
     // Merge into an identical row already in this rack (same item/color/size),
     // else insert a new row — so the same product never duplicates within a rack.
     const [existing] = await conn.query(
       `SELECT id, qty FROM item_location
-       WHERE fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
-      [rackId, item, color, size]
+       WHERE fk_org_id = ? AND fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
+      [orgId, rackId, item, color, size]
     );
     let itemId, before, after;
     if (existing.length) {
       const newQty = existing[0].qty + qty;
       await conn.query('UPDATE item_location SET qty = ? WHERE id = ?', [newQty, existing[0].id]);
       itemId = existing[0].id;
-      before = { id: itemId, item, color, size, qty: existing[0].qty, fk_rack_id: rackId };
-      after = { id: itemId, item, color, size, qty: newQty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
+      before = { id: itemId, item, color, size, qty: existing[0].qty, fk_rack_id: rackId, rack_id: code };
+      after = { id: itemId, item, color, size, qty: newQty, fk_rack_id: rackId, rack_id: code, module_type: moduleType, module_id: moduleId };
     } else {
       const [res] = await conn.query(
-        `INSERT INTO item_location (item, color, size, qty, fk_rack_id, module_id, module_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [item, color, size, qty, rackId, moduleId, moduleType]
+        `INSERT INTO item_location (fk_org_id, item, color, size, qty, fk_rack_id, module_id, module_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [orgId, item, color, size, qty, rackId, moduleId, moduleType]
       );
       itemId = res.insertId;
       before = null;
-      after = { id: itemId, item, color, size, qty, fk_rack_id: rackId, module_type: moduleType, module_id: moduleId };
+      after = { id: itemId, item, color, size, qty, fk_rack_id: rackId, rack_id: code, module_type: moduleType, module_id: moduleId };
     }
-    const rackState = await recalcRack(conn, rackId);
-    await writeAudit(conn, { entityType: 'item_location', entityId: itemId, action: 'add', before, after, userId });
-    return { item: after, rack: { rack_id: rackId, ...rackState }, merged: existing.length > 0 };
+    const rackState = await recalcRack(conn, orgId, rackId);
+    await writeAudit(conn, { orgId, entityType: 'item_location', entityId: itemId, action: 'add', before, after, userId });
+    return { item: after, rack: { id: rackId, rack_id: code, ...rackState }, merged: existing.length > 0 };
   });
 }
 
-export async function updateItemQty({ id, qty, userId = 'system' }) {
+export async function updateItemQty(orgId, { id, qty, userId = 'system' }) {
+  assertOrg(orgId, 'updateItemQty');
   qty = Number(qty);
   if (!Number.isInteger(qty) || qty < 0) {
     throw new HttpError(400, 'qty must be an integer >= 0 (0 removes the item)');
   }
+  const widths = await getOrgWidths(orgId);
   return withTransaction(async (conn) => {
-    const before = await getItemForUpdate(conn, id);
-    const rack = await getRackForUpdate(conn, before.fk_rack_id);
+    const before = await getItemForUpdate(conn, orgId, id);
+    const rack = await getRackForUpdate(conn, orgId, before.fk_rack_id);
+    const code = decorateRack(rack, widths).rack_id;
     const projectedUsed = rack.used - before.qty + qty;
-    assertCapacity(rack, projectedUsed);
+    assertCapacity(rack, projectedUsed, code);
 
     let action;
     if (qty === 0) {
@@ -146,19 +176,22 @@ export async function updateItemQty({ id, qty, userId = 'system' }) {
       await conn.query('UPDATE item_location SET qty = ? WHERE id = ?', [qty, id]);
       action = 'update';
     }
-    const rackState = await recalcRack(conn, before.fk_rack_id);
+    const rackState = await recalcRack(conn, orgId, before.fk_rack_id);
     await writeAudit(conn, {
-      entityType: 'item_location', entityId: id, action,
-      before, after: qty === 0 ? null : { ...before, qty }, userId,
+      orgId, entityType: 'item_location', entityId: id, action,
+      before: { ...before, rack_id: code },
+      after: qty === 0 ? null : { ...before, qty, rack_id: code },
+      userId,
     });
-    return { removed: qty === 0, rack: { rack_id: before.fk_rack_id, ...rackState } };
+    return { removed: qty === 0, rack: { id: before.fk_rack_id, rack_id: code, ...rackState } };
   });
 }
 
 // Picklist fulfilment (Flow C): deduct every picked quantity against one
 // Delivery Challan in a single transaction. Deduction only — a rack's `used`
 // can only fall here, so there is no capacity check.
-export async function pickItems({ picks, dcNo, userId = 'system' }) {
+export async function pickItems(orgId, { picks, dcNo, userId = 'system' }) {
+  assertOrg(orgId, 'pickItems');
   if (!Array.isArray(picks) || !picks.length) {
     throw new HttpError(400, 'picks must be a non-empty array');
   }
@@ -180,16 +213,19 @@ export async function pickItems({ picks, dcNo, userId = 'system' }) {
   // same sequence and queue instead of deadlocking.
   const ordered = [...byId.entries()].sort((a, b) => a[0] - b[0]);
 
+  const widths = await getOrgWidths(orgId);
   return withTransaction(async (conn) => {
     const rackIds = new Set();
     let removed = 0, updated = 0, totalQty = 0;
 
     for (const [id, qty] of ordered) {
-      const before = await getItemForUpdate(conn, id);
+      const before = await getItemForUpdate(conn, orgId, id);
+      const rackRow = await getRackForUpdate(conn, orgId, before.fk_rack_id);
+      const code = decorateRack(rackRow, widths).rack_id;
       if (qty > before.qty) {
         throw new HttpError(
           400,
-          `Cannot pick ${qty} of ${before.item} from ${before.fk_rack_id}; only ${before.qty} in stock`
+          `Cannot pick ${qty} of ${before.item} from ${code}; only ${before.qty} in stock`
         );
       }
       const remaining = before.qty - qty;
@@ -206,12 +242,11 @@ export async function pickItems({ picks, dcNo, userId = 'system' }) {
       // in the audit_log.action ENUM, and both also mean "someone edited a
       // quantity by hand". `source: 'picklist'` is what separates the two, so
       // the Audit Log still shows WHY the stock left even when there is no
-      // challan number (manual entry transcribes a challan's items, not its
-      // number). `picklist` is added only when one is actually known.
-      const after = { source: 'picklist', pickedQty: qty, remainingQty: remaining, rack: before.fk_rack_id };
+      // challan number. `picklist` is added only when one is actually known.
+      const after = { source: 'picklist', pickedQty: qty, remainingQty: remaining, rack: code };
       if (dcNo) after.picklist = dcNo;
       await writeAudit(conn, {
-        entityType: 'item_location', entityId: id,
+        orgId, entityType: 'item_location', entityId: id,
         action: remaining === 0 ? 'remove' : 'update',
         before, after, userId,
       });
@@ -221,7 +256,12 @@ export async function pickItems({ picks, dcNo, userId = 'system' }) {
     // must not be recalculated against a half-applied state.
     const racks = [];
     for (const rackId of rackIds) {
-      racks.push({ rack_id: rackId, ...(await recalcRack(conn, rackId)) });
+      const state = await recalcRack(conn, orgId, rackId);
+      const [[row]] = await conn.query(
+        'SELECT rack_no, shelf_no, bin_no FROM rack_master WHERE id = ? AND fk_org_id = ?',
+        [rackId, orgId]
+      );
+      racks.push({ id: rackId, rack_id: decorateRack(row, widths).rack_id, ...state });
     }
     return { racks, removed, updated, pickedQty: totalQty };
   });
@@ -229,17 +269,29 @@ export async function pickItems({ picks, dcNo, userId = 'system' }) {
 
 // Atomic move: deduct from source row, merge into a same-item row in the
 // destination rack (or create one), recalc BOTH racks. All-or-nothing.
-export async function moveItem({ itemId, toRackId, qty, userId = 'system' }) {
+export async function moveItem(orgId, { itemId, toRackId, qty, userId = 'system' }) {
+  assertOrg(orgId, 'moveItem');
   qty = Number(qty);
   if (!Number.isInteger(qty) || qty <= 0) throw new HttpError(400, 'qty must be a positive integer');
+  const widths = await getOrgWidths(orgId);
   return withTransaction(async (conn) => {
-    const src = await getItemForUpdate(conn, itemId);
-    if (toRackId === src.fk_rack_id) throw new HttpError(400, 'Destination rack is the same as source');
+    const src = await getItemForUpdate(conn, orgId, itemId);
+    if (Number(toRackId) === Number(src.fk_rack_id)) {
+      throw new HttpError(400, 'Destination rack is the same as source');
+    }
     if (qty > src.qty) throw new HttpError(400, `Cannot move ${qty}; only ${src.qty} in stock`);
 
-    const destRack = await getRackForUpdate(conn, toRackId);
-    assertCapacity(destRack, destRack.used + qty);
     const srcRackId = src.fk_rack_id;
+    // Lock both racks in ascending id order so two opposing moves queue instead
+    // of deadlocking.
+    const [lowId, highId] = [srcRackId, Number(toRackId)].sort((a, b) => a - b);
+    const lockedLow = await getRackForUpdate(conn, orgId, lowId);
+    const lockedHigh = await getRackForUpdate(conn, orgId, highId);
+    const srcRack = lowId === Number(srcRackId) ? lockedLow : lockedHigh;
+    const destRack = lowId === Number(toRackId) ? lockedLow : lockedHigh;
+    const srcCode = decorateRack(srcRack, widths).rack_id;
+    const destCode = decorateRack(destRack, widths).rack_id;
+    assertCapacity(destRack, destRack.used + qty, destCode);
 
     // Deduct from source (delete the row if it empties out).
     if (qty === src.qty) {
@@ -251,30 +303,30 @@ export async function moveItem({ itemId, toRackId, qty, userId = 'system' }) {
     // Merge into an identical row in the destination, else insert a new one.
     const [existing] = await conn.query(
       `SELECT id, qty FROM item_location
-       WHERE fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
-      [toRackId, src.item, src.color, src.size]
+       WHERE fk_org_id = ? AND fk_rack_id = ? AND item = ? AND color = ? AND size = ? LIMIT 1 FOR UPDATE`,
+      [orgId, toRackId, src.item, src.color, src.size]
     );
     if (existing.length) {
       await conn.query('UPDATE item_location SET qty = qty + ? WHERE id = ?', [qty, existing[0].id]);
     } else {
       await conn.query(
-        `INSERT INTO item_location (item, color, size, qty, fk_rack_id, module_id, module_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [src.item, src.color, src.size, qty, toRackId, src.module_id, src.module_type]
+        `INSERT INTO item_location (fk_org_id, item, color, size, qty, fk_rack_id, module_id, module_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [orgId, src.item, src.color, src.size, qty, toRackId, src.module_id, src.module_type]
       );
     }
 
-    const srcState = await recalcRack(conn, srcRackId);
-    const destState = await recalcRack(conn, toRackId);
+    const srcState = await recalcRack(conn, orgId, srcRackId);
+    const destState = await recalcRack(conn, orgId, toRackId);
     await writeAudit(conn, {
-      entityType: 'item_location', entityId: itemId, action: 'move',
-      before: { rack: srcRackId, item: src.item, color: src.color, size: src.size, qty: src.qty },
-      after: { fromRack: srcRackId, toRack: toRackId, movedQty: qty },
+      orgId, entityType: 'item_location', entityId: itemId, action: 'move',
+      before: { rack: srcCode, item: src.item, color: src.color, size: src.size, qty: src.qty },
+      after: { fromRack: srcCode, toRack: destCode, movedQty: qty },
       userId,
     });
     return {
-      from: { rack_id: srcRackId, ...srcState },
-      to: { rack_id: toRackId, ...destState },
+      from: { id: srcRackId, rack_id: srcCode, ...srcState },
+      to: { id: Number(toRackId), rack_id: destCode, ...destState },
     };
   });
 }

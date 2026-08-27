@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { pool } from '../db.js';
 import { findPlacements, pickItems, HttpError } from '../services/rackService.js';
 import { fetchTransactions } from '../services/sourceModules.js';
 import { savePicklist, markRackUpdated, getPicklist } from '../services/picklistStore.js';
@@ -59,7 +58,7 @@ router.get('/challans', async (req, res, next) => {
 // the challan reads, then resolve each to the racks holding it.
 // Shared by both entry paths — typed by hand today, read off the Vastra module
 // once that API exists — so the two can never drift apart.
-async function resolveLines(rawLines) {
+async function resolveLines(orgId, rawLines) {
   // One row per item: a challan may list the same item/color/size twice.
   const merged = new Map();
   for (const r of rawLines) {
@@ -89,7 +88,7 @@ async function resolveLines(rawLines) {
   const placed = await Promise.all(
     // findPlacements already orders qty DESC — exactly the largest-first
     // order the allocation wants, so no re-sort here.
-    lines.map((l) => findPlacements(pool, { item: l.item, color: l.color, size: l.size }))
+    lines.map((l) => findPlacements(orgId, { item: l.item, color: l.color, size: l.size }))
   );
 
   return lines.map((l, i) => {
@@ -112,12 +111,12 @@ async function resolveLines(rawLines) {
 router.post('/resolve', async (req, res, next) => {
   try {
     const { dcNo = null, party = '', date = null, lines = [], picklistId = null } = req.body;
-    const rows = await resolveLines(lines);
+    const rows = await resolveLines(req.org.id, lines);
     if (!rows.length) throw new HttpError(400, 'Add at least one item with a positive quantity');
     // Generating still changes no stock, but it does leave a history entry —
     // that trace is what makes "generated and never acted on" visible later.
     // `picklistId` lets a regenerate update the same entry instead of piling up.
-    const id = await savePicklist({
+    const id = await savePicklist(req.org.id, {
       id: picklistId, dcNo, party, source: 'manual', rows, userId: req.org.vastra_org_id,
     });
     res.json({ id, dcNo: dcNo ? String(dcNo).trim() : null, party, date, rows, source: 'manual' });
@@ -130,11 +129,11 @@ router.post('/resolve', async (req, res, next) => {
 // allocation is recomputed rather than replayed. Read-only.
 router.get('/:id/resolve', async (req, res, next) => {
   try {
-    const stored = await getPicklist(Number(req.params.id));
+    const stored = await getPicklist(req.org.id, Number(req.params.id));
     if (!stored) throw new HttpError(404, 'Picklist not found');
     if (stored.rack_updated) throw new HttpError(409, 'This picklist has already updated the racks');
 
-    const rows = await resolveLines(stored.lines);
+    const rows = await resolveLines(req.org.id, stored.lines);
     // Flag lines whose racks no longer match what the printed sheet said, so
     // whoever is picking knows the paper is out of date.
     const wasRacks = new Map(stored.lines.map((l) => [`${l.item}|${l.color}|${l.size}`, l.racks]));
@@ -156,7 +155,7 @@ router.get('/:id/resolve', async (req, res, next) => {
 // browser's own viewer (and its download button) handles it.
 router.get('/:id/pdf', async (req, res, next) => {
   try {
-    const picklist = await getPicklist(Number(req.params.id));
+    const picklist = await getPicklist(req.org.id, Number(req.params.id));
     if (!picklist) throw new HttpError(404, 'Picklist not found');
     const name = picklist.dc_no ? `picklist-${picklist.dc_no}` : `picklist-${picklist.id}`;
     res.setHeader('Content-Type', 'application/pdf');
@@ -179,7 +178,7 @@ router.get('/:dcNo', async (req, res, next) => {
       dcNo,
       date: raw[0].date ?? null,
       party: raw[0].party ?? '',
-      rows: await resolveLines(raw),
+      rows: await resolveLines(req.org.id, raw),
       source: 'module',
     });
   } catch (err) { next(err); }
@@ -192,12 +191,12 @@ router.post('/pick', async (req, res, next) => {
   try {
     const picks = (req.body.picks || []).filter((p) => Number(p.qty) > 0);
     if (!picks.length) throw new HttpError(400, 'Nothing to pick');
-    const result = await pickItems({
+    const result = await pickItems(req.org.id, {
       picks, dcNo: req.body.dcNo || null, userId: req.org.vastra_org_id,
     });
     // Close the history entry. After the stock has moved, so a failed pick
     // never leaves a picklist marked as acted on.
-    await markRackUpdated(req.body.picklistId, result.pickedQty);
+    await markRackUpdated(req.org.id, req.body.picklistId, result.pickedQty);
     res.json(result);
   } catch (err) { next(err); }
 });

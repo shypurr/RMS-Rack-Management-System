@@ -61,19 +61,56 @@ export async function pingDb() {
 }
 
 // Apply the migrations that live OUTSIDE schema.sql, which seed.js drops and
-// recreates: auth (a demo reseed must never delete a login) and picklist
-// history (operational record, not demo data). All CREATE TABLE IF NOT EXISTS,
-// so this is safe on every boot and brings an existing database up to date
-// without a reseed. The pool is not multipleStatements, so split on ';'.
-const STANDING_MIGRATIONS = ['auth.sql', 'picklist.sql'];
+// recreates: auth (a demo reseed must never delete a login), picklist
+// history (operational record) and layout (an organization's real rack config).
+// All CREATE TABLE IF NOT EXISTS, so this is safe on every boot and brings an
+// existing database up to date without a reseed. The pool is not
+// multipleStatements, so split on ';'.
+const STANDING_MIGRATIONS = ['auth.sql', 'picklist.sql', 'layout.sql'];
+
+// Strip `--` line comments before splitting on ';'. A semicolon inside a
+// comment would otherwise cut a CREATE TABLE in half and the fragment would be
+// sent to MySQL as its own statement — which is exactly what happened the first
+// time a migration comment contained one.
+const stripComments = (sql) => sql.replace(/--.*/g, '');
+
+// Columns added to a standing-migration table AFTER it first shipped. Those
+// tables deliberately survive a reseed, so CREATE TABLE IF NOT EXISTS silently
+// skips them on an existing database and the new column never appears. MySQL 8
+// has no ADD COLUMN IF NOT EXISTS, so check information_schema first.
+//
+// The ALTER is deliberately allowed to fail loudly on a table that already has
+// rows: a NOT NULL org column cannot be invented for existing picklists, and
+// guessing an owner is worse than stopping.
+const BACKFILL_COLUMNS = [
+  {
+    table: 'picklist',
+    column: 'fk_org_id',
+    ddl: `ADD COLUMN fk_org_id INT NOT NULL,
+          ADD CONSTRAINT fk_picklist_org FOREIGN KEY (fk_org_id)
+            REFERENCES organization(id) ON DELETE CASCADE`,
+  },
+];
+
+async function applyBackfillColumns() {
+  for (const { table, column, ddl } of BACKFILL_COLUMNS) {
+    const [rows] = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+      [table, column]
+    );
+    if (!rows.length) await pool.query(`ALTER TABLE \`${table}\` ${ddl}`);
+  }
+}
 
 export async function applyAuthSchema() {
   for (const file of STANDING_MIGRATIONS) {
     const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8');
-    for (const stmt of sql.split(';')) {
+    for (const stmt of stripComments(sql).split(';')) {
       if (stmt.trim()) await pool.query(stmt);
     }
   }
+  await applyBackfillColumns();
 }
 
 // Run a function inside a transaction; commit on success, rollback on throw.

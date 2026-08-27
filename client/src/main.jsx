@@ -3,10 +3,12 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
 import { ToastProvider } from './components/Toast.jsx';
+import SetupGate from './components/SetupGate.jsx';
 import { getToken } from './api/client.js';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RackList from './pages/RackList.jsx';
+import RackSetup from './pages/RackSetup.jsx';
 import ItemManagement from './pages/ItemManagement.jsx';
 import AddItem from './pages/AddItem.jsx';
 import MoveItem from './pages/MoveItem.jsx';
@@ -37,11 +39,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               here (see api/client.js), so an expired session self-corrects. */}
           <Route element={<RequireAuth />}>
             <Route index element={<Dashboard />} />
-            <Route path="racks" element={<RackList />} />
+            <Route path="racks" element={<SetupGate><RackList /></SetupGate>} />
+            <Route path="setup" element={<RackSetup />} />
             <Route path="items" element={<ItemManagement />} />
-            <Route path="add" element={<AddItem />} />
-            <Route path="move" element={<MoveItem />} />
-            <Route path="picklist" element={<Picklist />} />
+            <Route path="add" element={<SetupGate><AddItem /></SetupGate>} />
+            <Route path="move" element={<SetupGate><MoveItem /></SetupGate>} />
+            <Route path="picklist" element={<SetupGate><Picklist /></SetupGate>} />
             <Route path="history" element={<History />} />
             <Route path="reports" element={<Reports />} />
             <Route path="report" element={<RackReport />} />

@@ -28,9 +28,11 @@ export default function RackList() {
   };
   useEffect(() => { load(); }, []);
 
-  const openRack = async (rackId) => {
+  // Numeric rack_master.id — the display code re-pads when the org grows, so
+  // it cannot address a row.
+  const openRack = async (id) => {
     try {
-      setSelected(await api.getRack(rackId));
+      setSelected(await api.getRack(id));
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -48,14 +50,14 @@ export default function RackList() {
   const rackText = useMemo(() => {
     const map = new Map();
     for (const it of items) {
-      map.set(it.rack_id, `${map.get(it.rack_id) || ''} ${searchText(it)}`);
+      map.set(it.fk_rack_id, `${map.get(it.fk_rack_id) || ''} ${searchText(it)}`);
     }
     return map;
   }, [items]);
 
   const filtered = racks.filter(
     (r) =>
-      matches(`${r.rack_id} ${rackText.get(r.rack_id) || ''}`, search) &&
+      matches(`${r.rack_id} ${rackText.get(r.id) || ''}`, search) &&
       (!statusFilter || r.status === statusFilter)
   );
 
@@ -113,7 +115,7 @@ export default function RackList() {
             </div>
           ) : filtered.length ? (
             <div className="grid cols-4 gap-col-4">
-              {filtered.map((r) => <RackCard key={r.rack_id} rack={r} onClick={() => openRack(r.rack_id)} />)}
+              {filtered.map((r) => <RackCard key={r.id} rack={r} onClick={() => openRack(r.id)} />)}
             </div>
           ) : (
             <div className="empty-state"><i className="fa-solid fa-box-open" /><p>No racks match your filters</p></div>
@@ -121,7 +123,7 @@ export default function RackList() {
         </div>
       </div>
 
-      {selected && <RackModal rack={selected} onClose={() => setSelected(null)} onChanged={async () => { await load(); await openRack(selected.rack_id); }} />}
+      {selected && <RackModal rack={selected} onClose={() => setSelected(null)} onChanged={async () => { await load(); await openRack(selected.id); }} />}
     </>
   );
 }

@@ -2,18 +2,21 @@ import { pool } from '../db.js';
 
 const num = (v) => Number(v) || 0;
 
-// One aggregation call powering the whole dashboard. All counts coerced to
-// numbers (MySQL returns SUM/COUNT as strings).
-export async function getDashboard() {
+// One aggregation call powering the whole dashboard, scoped to one
+// organization. Every subquery carries fk_org_id: this file is where the
+// "every login shows identical stats" bug lived, because none of them did.
+export async function getDashboard(orgId) {
+  if (!orgId) throw new Error('getDashboard requires an orgId');
+
   const [[totals]] = await pool.query(`
     SELECT
-      (SELECT COALESCE(SUM(qty),0) FROM item_location)                 AS total_items,
-      (SELECT COUNT(*) FROM rack_master)                               AS total_racks,
-      (SELECT COUNT(*) FROM rack_master WHERE status='Occupied')       AS occupied_racks,
-      (SELECT COUNT(*) FROM rack_master WHERE status='Vacant')         AS vacant_racks,
-      (SELECT COALESCE(SUM(capacity),0) FROM rack_master)              AS total_capacity,
-      (SELECT COALESCE(SUM(used),0) FROM rack_master)                  AS total_used
-  `);
+      (SELECT COALESCE(SUM(qty),0) FROM item_location WHERE fk_org_id = ?)         AS total_items,
+      (SELECT COUNT(*) FROM rack_master WHERE fk_org_id = ?)                       AS total_racks,
+      (SELECT COUNT(*) FROM rack_master WHERE fk_org_id = ? AND status='Occupied') AS occupied_racks,
+      (SELECT COUNT(*) FROM rack_master WHERE fk_org_id = ? AND status='Vacant')   AS vacant_racks,
+      (SELECT COALESCE(SUM(capacity),0) FROM rack_master WHERE fk_org_id = ?)      AS total_capacity,
+      (SELECT COALESCE(SUM(used),0) FROM rack_master WHERE fk_org_id = ?)          AS total_used
+  `, [orgId, orgId, orgId, orgId, orgId, orgId]);
 
   // Occupancy buckets (display buckets, same thresholds as the UI).
   const [[buckets]] = await pool.query(`
@@ -21,15 +24,15 @@ export async function getDashboard() {
       COALESCE(SUM(used=0),0)                              AS vacant,
       COALESCE(SUM(used>0 AND used < 0.85*capacity),0)     AS partial,
       COALESCE(SUM(used>0 AND used >= 0.85*capacity),0)    AS full
-    FROM rack_master
-  `);
+    FROM rack_master WHERE fk_org_id = ?
+  `, [orgId]);
 
   const [[today]] = await pool.query(`
     SELECT
       COALESCE(SUM(action='add'  AND DATE(created_at)=CURDATE()),0) AS added_today,
       COALESCE(SUM(action='move' AND DATE(created_at)=CURDATE()),0) AS moved_today
-    FROM audit_log
-  `);
+    FROM audit_log WHERE fk_org_id = ?
+  `, [orgId]);
 
   // Last 7 days of activity (added vs moved), sparse — client fills gaps.
   const [trend] = await pool.query(`
@@ -37,27 +40,29 @@ export async function getDashboard() {
            COALESCE(SUM(action='add'),0)  AS added,
            COALESCE(SUM(action='move'),0) AS moved
     FROM audit_log
-    WHERE created_at >= CURDATE() - INTERVAL 6 DAY
+    WHERE fk_org_id = ? AND created_at >= CURDATE() - INTERVAL 6 DAY
     GROUP BY DATE(created_at) ORDER BY day
-  `);
+  `, [orgId]);
 
   // Items stored per source module type (NULL = manual entry).
   const [moduleRows] = await pool.query(`
     SELECT COALESCE(module_type, 'Manual') AS module_type, SUM(qty) AS qty
-    FROM item_location GROUP BY COALESCE(module_type, 'Manual')
-  `);
+    FROM item_location WHERE fk_org_id = ?
+    GROUP BY COALESCE(module_type, 'Manual')
+  `, [orgId]);
 
   // Biggest items by quantity in stock — the Reports "Stock by Item" pie.
   // Capped at 8 to match the chart's colour palette.
   const [topItems] = await pool.query(`
     SELECT item, SUM(qty) AS qty
-    FROM item_location GROUP BY item ORDER BY qty DESC LIMIT 8
-  `);
+    FROM item_location WHERE fk_org_id = ?
+    GROUP BY item ORDER BY qty DESC LIMIT 8
+  `, [orgId]);
 
   const [recent] = await pool.query(`
     SELECT id, entity_type, entity_id, action, before_json, after_json, user_id, created_at
-    FROM audit_log ORDER BY id DESC LIMIT 8
-  `);
+    FROM audit_log WHERE fk_org_id = ? ORDER BY id DESC LIMIT 8
+  `, [orgId]);
 
   const overallPct = totals.total_capacity > 0
     ? Math.round((num(totals.total_used) / num(totals.total_capacity)) * 100) : 0;
