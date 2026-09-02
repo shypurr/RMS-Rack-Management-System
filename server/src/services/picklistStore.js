@@ -75,7 +75,8 @@ export async function listPicklists(orgId, limit = 100) {
   const [rows] = await pool.query(
     `SELECT p.id, p.dc_no, p.party, p.source, p.total_qty, p.short_qty,
             p.rack_updated, p.picked_qty, p.picked_at, p.user_id, p.created_at,
-            COUNT(l.id) AS line_count
+            COUNT(l.id) AS line_count,
+            GROUP_CONCAT(DISTINCT l.item ORDER BY l.item SEPARATOR '\\n') AS item_names
      FROM picklist p
      LEFT JOIN picklist_line l ON l.fk_picklist_id = p.id
      WHERE p.fk_org_id = ?
@@ -85,8 +86,16 @@ export async function listPicklists(orgId, limit = 100) {
     [orgId, limit]
   );
   // Aliased line_count, not `lines`: LINES is reserved in MySQL 8.
-  return rows.map(({ line_count, ...r }) => ({
-    ...r, rack_updated: !!r.rack_updated, lines: Number(line_count),
+  //
+  // `items` is what makes a picklist findable when no challan number was
+  // typed in — without it the only handle on the row is its timestamp, since
+  // dc_no is null and the item names live one table down in picklist_line.
+  // Newline-separated because an item name may legitimately contain a comma.
+  return rows.map(({ line_count, item_names, ...r }) => ({
+    ...r,
+    rack_updated: !!r.rack_updated,
+    lines: Number(line_count),
+    items: item_names ? item_names.split('\n') : [],
   }));
 }
 

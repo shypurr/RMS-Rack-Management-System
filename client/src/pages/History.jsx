@@ -35,8 +35,15 @@ export default function History() {
     () => putaway.filter((r) => matches(`${r.item} ${r.color} ${r.size} ${r.rack_id} ${r.module_id || ''} ${r.module_type || ''} ${r.user_id}`, query)),
     [putaway, query]
   );
+  // The item names are in the haystack because the challan no is optional: a
+  // picklist entered without one has no other handle on it, so searching by
+  // what was picked is the only way back to it. `#id` matches too, since that
+  // is what the table shows in place of a missing challan number.
   const shownPicklists = useMemo(
-    () => picklists.filter((r) => matches(`${r.dc_no || ''} ${r.party || ''} ${r.user_id} ${r.rack_updated ? 'updated' : 'not updated pending'}`, query)),
+    () => picklists.filter((r) => matches(
+      `${r.dc_no || ''} #${r.id} ${r.party || ''} ${(r.items || []).join(' ')} ${r.user_id} ${r.rack_updated ? 'updated' : 'not updated pending'}`,
+      query
+    )),
     [picklists, query]
   );
 
@@ -83,7 +90,7 @@ export default function History() {
             <input className="form-control" value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder={tab === 'putaway'
                 ? 'Search item, colour, size, rack or module code…'
-                : 'Search challan no, party, or "not updated"…'} />
+                : 'Search challan no, #id, party, item name, or "not updated"…'} />
           </div>
 
           {tab === 'picklist' && notUpdated > 0 && !query && (
@@ -139,13 +146,23 @@ export default function History() {
             <div className="data-table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>When</th><th>Challan No</th><th>Party</th><th>Lines</th><th>Qty</th><th>Rack updated</th><th>By</th><th /></tr>
+                  <tr><th>When</th><th>Challan No</th><th>Items</th><th>Party</th><th>Lines</th><th>Qty</th><th>Rack updated</th><th>By</th><th /></tr>
                 </thead>
                 <tbody>
                   {shownPicklists.map((r) => (
                     <tr key={r.id}>
                       <td className="text-muted text-xs">{fmt(r.created_at)}</td>
                       <td className="font-600">{r.dc_no || <span className="text-muted">#{r.id}</span>}</td>
+                      {/* Without a challan number this column is what identifies
+                          the picklist, so it is shown, not just searchable. */}
+                      <td className="text-xs">
+                        {r.items?.length
+                          ? <span title={r.items.join(', ')}>
+                              {r.items.slice(0, 3).join(', ')}
+                              {r.items.length > 3 && <span className="text-muted"> +{r.items.length - 3} more</span>}
+                            </span>
+                          : <span className="text-muted">—</span>}
+                      </td>
                       <td>{r.party || '—'}</td>
                       <td>{r.lines}</td>
                       <td>

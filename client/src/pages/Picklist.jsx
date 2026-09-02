@@ -13,11 +13,19 @@ import { useToast } from '../components/Toast.jsx';
 // Two deliberate steps either way. "Generate Picklist" only READS. "Update
 // Rack" is the one that deducts, and only what is in the qty boxes.
 
+// The "From Vastra Module" tab is fully wired (DcCombobox, GET /api/picklist/
+// :dcNo, the module branch in generate) but Vastra does not serve the Delivery
+// Challan module yet, so showing the tab only offers the user something that
+// cannot work. Flip this to true the day the module goes live — nothing else
+// on this page needs to change.
+const VASTRA_DC_READY = false;
+
 // One draft = one line on the challan: a design, in one colour, across a run of
 // sizes. Same design in another colour is a second line, exactly as the challan
-// prints it. `sizeQty` holds quantities against sizes that are in stock;
-// `extra` is for sizes that aren't (they'll report as short).
-const EMPTY_DRAFT = { item: '', color: '', sizeQty: {}, extra: [] };
+// prints it. `sizeQty` holds quantities against the sizes that are in stock —
+// and only those, because a picklist is stock LEAVING the warehouse and cannot
+// take out more than is in it.
+const EMPTY_DRAFT = { item: '', color: '', sizeQty: {} };
 
 export default function Picklist() {
   const toast = useToast();
@@ -71,11 +79,42 @@ export default function Picklist() {
     return sizes ? [...sizes.entries()].sort((a, b) => sizeKey(a[0]) - sizeKey(b[0]) || a[0].localeCompare(b[0])) : [];
   }, [catalog, draft.item, draft.color]);
 
-  // How far the draft exceeds what's on hand, summed across its size run.
-  const draftOver = draftSizes.reduce(
-    (s, [size, have]) => s + Math.max(0, (Number(draft.sizeQty[size]) || 0) - have),
-    0
-  );
+  // What the challan ALREADY claims of this design+colour, per size. A second
+  // line for the same item+colour+size is summed server-side by resolveLines,
+  // so the ceiling has to account for it or two half-size lines would together
+  // walk past the stock the cap is supposed to enforce.
+  const committed = useMemo(() => {
+    const m = new Map();
+    const item = draft.item.trim(), color = draft.color.trim();
+    for (const l of lines) {
+      if (l.item !== item || l.color !== color) continue;
+      m.set(l.size, (m.get(l.size) || 0) + l.qty);
+    }
+    return m;
+  }, [lines, draft.item, draft.color]);
+
+  // The hard ceiling for one size box: everything the warehouse holds of that
+  // item+colour+size across ALL racks, less whatever is already on this
+  // challan. Stock going OUT cannot exceed stock on hand — unlike Putaway,
+  // where the inward count is a judgement call and stays freely editable.
+  const ceilingFor = (size, have) => Math.max(0, have - (committed.get(size) || 0));
+
+  // Sizes whose last keystroke was cut down to the ceiling, so the cell can say
+  // why the number it shows is not the number that was typed.
+  const [capped, setCapped] = useState({});
+
+  const setSizeQty = (size, raw, ceiling) => {
+    if (raw === '') {
+      setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: '' } });
+      setCapped(({ [size]: _drop, ...rest }) => rest);
+      return;
+    }
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 0) return;   // junk ("e", "-") never lands
+    const clamped = Math.min(n, ceiling);
+    setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: String(clamped) } });
+    setCapped(({ [size]: _drop, ...rest }) => (n > ceiling ? { ...rest, [size]: ceiling } : rest));
+  };
 
   // Any edit to the challan invalidates a picklist generated from the old one.
   const clearPicklist = () => { setDetail(null); setAlloc({}); };
@@ -84,21 +123,28 @@ export default function Picklist() {
   const addDraft = () => {
     const item = draft.item.trim();
     if (!item) return toast('Pick an item first', 'warning');
+    const color = draft.color.trim();
 
-    // The size run plus any off-catalogue sizes typed underneath it.
-    const fromRun = draftSizes.map(([size]) => ({ size, qty: Number(draft.sizeQty[size]) || 0 }));
-    const fromExtra = draft.extra.map((e) => ({ size: e.size.trim(), qty: Number(e.qty) || 0 }));
-    const added = [...fromRun, ...fromExtra]
-      .filter((s) => s.qty > 0)
-      .map((s) => ({ item, color: draft.color.trim(), size: s.size, qty: s.qty }));
+    // Only the size run — every quantity in it is already capped at stock.
+    const added = draftSizes
+      .map(([size]) => ({ item, color, size, qty: Number(draft.sizeQty[size]) || 0 }))
+      .filter((s) => s.qty > 0);
 
     if (!added.length) return toast('Enter a quantity against at least one size', 'warning');
-    editLines([...lines, ...added]);
-    setDraft(EMPTY_DRAFT);
-  };
 
-  const setExtra = (i, patch) =>
-    setDraft({ ...draft, extra: draft.extra.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
+    // Merge into a line already on the challan for the same item+colour+size
+    // rather than appending a second one — the challan should read as one row
+    // per size, and the merged total is what the cap was computed against.
+    const next = [...lines];
+    for (const a of added) {
+      const at = next.findIndex((l) => l.item === a.item && l.color === a.color && l.size === a.size);
+      if (at >= 0) next[at] = { ...next[at], qty: next[at].qty + a.qty };
+      else next.push(a);
+    }
+    editLines(next);
+    setDraft(EMPTY_DRAFT);
+    setCapped({});
+  };
 
   const generate = async (dc = dcNo) => {
     setLoading(true);
@@ -162,7 +208,7 @@ export default function Picklist() {
       // The pick is done — clear the whole challan so the next one starts from
       // a blank slate. Leaving the list up invites picking it a second time.
       setStock(await api.listItems());   // the catalogue's availability just changed
-      setLines([]); setDraft(EMPTY_DRAFT);
+      setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
       setDcNo(''); setParty('');
       clearPicklist();
     } catch (e) {
@@ -201,7 +247,7 @@ export default function Picklist() {
   const switchMode = (m) => {
     setMode(m);
     setDcNo(''); setParty('');
-    setLines([]); setDraft(EMPTY_DRAFT);
+    setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
     clearPicklist();
   };
 
@@ -221,10 +267,12 @@ export default function Picklist() {
           <div className="card mb-4" style={{ overflow: 'visible' }}>
             <div className="card-header"><span className="card-title"><i className="fa-solid fa-file-invoice text-primary-color" />&nbsp; Step 1 — Delivery Challan</span></div>
             <div className="card-body">
-              <div className="tab-bar">
-                <div className={`tab-btn ${mode === 'manual' ? 'active' : ''}`} onClick={() => switchMode('manual')}>Manual Entry</div>
-                <div className={`tab-btn ${mode === 'module' ? 'active' : ''}`} onClick={() => switchMode('module')}>From Vastra Module</div>
-              </div>
+              {VASTRA_DC_READY && (
+                <div className="tab-bar">
+                  <div className={`tab-btn ${mode === 'manual' ? 'active' : ''}`} onClick={() => switchMode('manual')}>Manual Entry</div>
+                  <div className={`tab-btn ${mode === 'module' ? 'active' : ''}`} onClick={() => switchMode('module')}>From Vastra Module</div>
+                </div>
+              )}
 
               {mode === 'manual' && (
                 <>
@@ -235,8 +283,9 @@ export default function Picklist() {
                     <Field label="Party" value={party} placeholder="optional" onChange={setParty} />
                   </div>
                   <p className="text-xs text-muted">
-                    Both optional. Filling in the challan no. is what lets you find this picklist again in
-                    History if the stock ever looks wrong.
+                    Both optional. Without a challan no. this picklist is listed in History as
+                    <span className="font-600"> #id</span> and is findable by its item names, party or
+                    date — filling the challan no. in just gives you the number you already know it by.
                   </p>
                 </>
               )}
@@ -315,53 +364,55 @@ export default function Picklist() {
                         value={draft.item}
                         items={itemNames}
                         stats={itemStats}
-                        onChange={(v) => setDraft({ ...EMPTY_DRAFT, item: v })}
+                        onChange={(v) => { setDraft({ ...EMPTY_DRAFT, item: v }); setCapped({}); }}
                       />
                     </div>
                     <div className="form-group">
                       <label className="form-label">Color</label>
                       {draftColors.length > 0 ? (
                         <select className="form-control" value={draft.color}
-                          onChange={(e) => setDraft({ ...draft, color: e.target.value, sizeQty: {} })}>
+                          onChange={(e) => { setDraft({ ...draft, color: e.target.value, sizeQty: {} }); setCapped({}); }}>
                           <option value="">Select a color…</option>
                           {draftColors.map((c) => <option key={c} value={c}>{c || '(no color)'}</option>)}
                         </select>
                       ) : (
                         <input className="form-control" placeholder="Color" value={draft.color}
-                          onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
+                          onChange={(e) => { setDraft({ ...draft, color: e.target.value, sizeQty: {} }); setCapped({}); }} />
                       )}
                     </div>
                   </div>
 
                   {/* The size run — one design across a row of sizes, the shape
-                      the challan itself uses. */}
+                      the challan itself uses. Each box is hard-capped: stock
+                      cannot leave the warehouse that isn't in it. */}
                   {draftSizes.length > 0 && (
                     <div className="form-group">
                       <label className="form-label">Quantity per size</label>
                       <div className="size-run">
                         {draftSizes.map(([size, have]) => {
-                          // A challan can legitimately ask for more than we
-                          // hold — that is what the shortage badge is for — so
-                          // this warns rather than clamping. Clamping would
-                          // quietly rewrite the customer's order.
-                          const over = (Number(draft.sizeQty[size]) || 0) > have;
+                          const ceiling = ceilingFor(size, have);
+                          const onChallan = committed.get(size) || 0;
                           return (
-                            <div key={size} className={`size-cell ${over ? 'over' : ''}`}>
+                            <div key={size} className={`size-cell ${capped[size] !== undefined ? 'over' : ''} ${ceiling === 0 ? 'maxed' : ''}`}>
                               <div className="size-cell-label">{size || 'no size'}</div>
-                              <input className="form-control" type="number" min="0" placeholder="0"
+                              <input className="form-control" type="number" min="0" max={ceiling}
+                                placeholder="0" disabled={ceiling === 0}
                                 value={draft.sizeQty[size] ?? ''}
-                                onChange={(e) => setDraft({ ...draft, sizeQty: { ...draft.sizeQty, [size]: e.target.value } })} />
+                                onChange={(e) => setSizeQty(size, e.target.value, ceiling)} />
                               <div className="size-cell-stock">{have} in stock</div>
-                              {over && <div className="size-cell-over">only {have}</div>}
+                              {onChallan > 0 && <div className="size-cell-stock">{onChallan} on challan</div>}
+                              {ceiling === 0
+                                ? <div className="size-cell-over">all taken</div>
+                                : capped[size] !== undefined && <div className="size-cell-over">max {ceiling}</div>}
                             </div>
                           );
                         })}
                       </div>
-                      {draftOver > 0 && (
+                      {Object.keys(capped).length > 0 && (
                         <p className="text-xs text-danger mt-1">
                           <i className="fa-solid fa-triangle-exclamation" />&nbsp;
-                          {draftOver} unit{draftOver > 1 ? 's' : ''} more than stock. You can still add it —
-                          it will show as short on the picklist.
+                          Capped at what the racks actually hold — a picklist can only take out
+                          stock that is in the warehouse.
                         </p>
                       )}
                     </div>
@@ -371,39 +422,23 @@ export default function Picklist() {
                     <p className="text-xs text-muted mb-3">Pick a colour to see its size run.</p>
                   )}
 
-                  {/* Sizes the warehouse doesn't stock — allowed, they report short */}
-                  {draft.extra.map((e, i) => (
-                    <div key={i} className="grid cols-2 gap-col-4">
-                      <Field label={i === 0 ? 'Size (not in stock)' : ''} value={e.size}
-                        onChange={(v) => setExtra(i, { size: v })} />
-                      <div className="flex gap-2 items-center">
-                        <div style={{ flex: 1 }}>
-                          <Field label={i === 0 ? 'Quantity' : ''} type="number" value={e.qty}
-                            onChange={(v) => setExtra(i, { qty: v })} />
-                        </div>
-                        <button className="btn btn-ghost btn-sm" title="Remove size"
-                          style={{ marginTop: i === 0 ? 18 : 0 }}
-                          onClick={() => setDraft({ ...draft, extra: draft.extra.filter((_, j) => j !== i) })}>
-                          <i className="fa-solid fa-xmark" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                  {/* "Add a size not in stock" used to live here. It is gone
+                      because it was the way around the cap: a size typed free
+                      hand merges back into the same item+colour+size line
+                      server-side, so it could put a line over stock after the
+                      size run had been capped. */}
 
                   {draft.item && !catalog.has(draft.item) && (
                     <p className="text-xs text-danger mb-3">
                       <i className="fa-solid fa-triangle-exclamation" />&nbsp;
-                      &ldquo;{draft.item}&rdquo; isn&apos;t in any rack. It can still go on the challan, but it will show as short.
+                      &ldquo;{draft.item}&rdquo; isn&apos;t in any rack, so there is nothing to pick.
+                      Put it away first, then build the picklist.
                     </p>
                   )}
 
                   <div className="flex gap-3 items-center">
                     <button className="btn btn-primary" onClick={addDraft} disabled={!draft.item}>
                       <i className="fa-solid fa-plus" /> Add item
-                    </button>
-                    <button className="btn btn-ghost btn-sm"
-                      onClick={() => setDraft({ ...draft, extra: [...draft.extra, { size: '', qty: '' }] })}>
-                      <i className="fa-solid fa-plus" /> Add a size not in stock
                     </button>
                   </div>
                 </div>

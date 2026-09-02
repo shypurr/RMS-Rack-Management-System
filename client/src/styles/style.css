@@ -396,11 +396,14 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .size-cell input { padding: 4px 6px; font-size: 13px; text-align: center; }
 .size-cell-stock { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 
-/* Asking for more than the racks hold is allowed — a challan can legitimately
-   order what isn't in stock — so this flags it rather than blocking it. */
+/* Picking more than the racks hold is impossible, so the box is capped rather
+   than flagged. `.over` now means "the number you typed was cut down to this",
+   `.maxed` that the challan already claims every unit of that size. */
 .size-cell.over { border-color: var(--danger); }
 .size-cell.over input { border-color: var(--danger); color: var(--danger); }
 .size-cell-over { font-size: 10px; font-weight: 700; color: var(--danger); }
+.size-cell.maxed { opacity: 0.6; }
+.size-cell input:disabled { cursor: not-allowed; }
 
 /* Picklist rack cell: one line per rack holding the item, each with its own
    editable pick quantity. Top-aligned so multi-rack rows read as a list. */

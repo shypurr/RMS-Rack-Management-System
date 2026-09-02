@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { listRacks, getRackWithItems } from '../services/rackService.js';
+import { HttpError } from '../lib/httpError.js';
 
 const router = Router();
 
@@ -15,7 +16,15 @@ router.get('/', async (req, res, next) => {
 // the organization grows, so they cannot address a row.
 router.get('/:id', async (req, res, next) => {
   try {
-    res.json(await getRackWithItems(req.org.id, Number(req.params.id)));
+    // Reject a non-numeric id here rather than letting NaN reach the query.
+    // MySQL reads a bare NaN in a WHERE clause as an identifier, so a client
+    // sending the display code got "Unknown column 'NaN'" — a 500 for what is
+    // really a bad request.
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new HttpError(400, `Invalid rack id "${req.params.id}" — expected a numeric rack id`);
+    }
+    res.json(await getRackWithItems(req.org.id, id));
   } catch (err) { next(err); }
 });
 

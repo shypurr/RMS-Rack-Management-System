@@ -35,7 +35,10 @@ export default function RackReport() {
             <label className="form-label">Select Rack</label>
             <select className="form-control" value={rackId} onChange={(e) => setRackId(e.target.value)}>
               <option value="">Choose a rack…</option>
-              {racks.map((r) => <option key={r.rack_id} value={r.rack_id}>{r.rack_id} — {r.status} ({r.used}/{r.capacity})</option>)}
+              {/* value is the numeric rack_master.id, never the display code:
+                  /api/racks/:id addresses a row, and codes re-pad as the org
+                  grows. Sending rack_id made the route parse NaN. */}
+              {racks.map((r) => <option key={r.id} value={r.id}>{r.rack_id} — {r.status} ({r.used}/{r.capacity})</option>)}
             </select>
           </div>
         </div>
