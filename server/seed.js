@@ -5,6 +5,7 @@ import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { sslConfig } from './src/db.js';
 import { buildChallans, CHALLAN_COLUMNS } from './challanFixtures.js';
+import { buildInwards, INWARD_COLUMNS, CATALOG } from './inwardFixtures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB = process.env.DB_NAME || 'rms';
@@ -18,56 +19,19 @@ const VASTRA_ORG_ID = orgFlag ? orgFlag.slice('--org='.length) : null;
 
 // ── catalogue ──────────────────────────────────────────────────────────────
 // Colours/sizes are per-item so the generated stock reads like real textile
-// inventory (a Saree has no size, Kids Wear has its own size run).
-const CATALOG = [
-  { item: 'Banarasi Saree',   colors: ['Maroon', 'Red', 'Gold', 'Emerald', 'Navy'],       sizes: ['Free Size'] },
-  { item: 'Cotton Saree',     colors: ['White', 'Beige', 'Sky Blue', 'Mustard'],          sizes: ['Free Size'] },
-  { item: 'Anarkali Kurti',   colors: ['Red', 'Black', 'Teal', 'Peach', 'Olive'],         sizes: ['S', 'M', 'L', 'XL', 'XXL'] },
-  { item: 'Rayon Kurti',      colors: ['Blue', 'Green', 'Pink', 'Grey'],                  sizes: ['S', 'M', 'L', 'XL'] },
-  { item: 'Salwar Kameez',    colors: ['Cream', 'Maroon', 'Navy', 'Lavender'],            sizes: ['S', 'M', 'L', 'XL'] },
-  { item: 'Bridal Lehenga',   colors: ['Red', 'Magenta', 'Gold', 'Wine'],                 sizes: ['S', 'M', 'L'] },
-  { item: 'Chiffon Dupatta',  colors: ['White', 'Yellow', 'Turquoise', 'Rose'],           sizes: ['Free Size'] },
-  { item: 'Formal Shirt',     colors: ['White', 'Sky Blue', 'Black', 'Lilac'],            sizes: ['38', '40', '42', '44'] },
-  { item: 'Casual Shirt',     colors: ['Denim', 'Olive', 'Checked Red', 'Grey'],          sizes: ['S', 'M', 'L', 'XL'] },
-  { item: 'Formal Trousers',  colors: ['Black', 'Navy', 'Charcoal', 'Beige'],             sizes: ['30', '32', '34', '36', '38'] },
-  { item: 'Palazzo Pants',    colors: ['Black', 'White', 'Mustard', 'Maroon'],            sizes: ['S', 'M', 'L', 'XL'] },
-  { item: 'Kids Frock',       colors: ['Pink', 'Yellow', 'Sky Blue', 'Mint'],             sizes: ['2-3Y', '4-5Y', '6-7Y', '8-9Y'] },
-  { item: 'Kids Kurta Set',   colors: ['White', 'Orange', 'Green'],                       sizes: ['2-3Y', '4-5Y', '6-7Y'] },
-  { item: 'Nehru Jacket',     colors: ['Black', 'Beige', 'Maroon', 'Bottle Green'],       sizes: ['38', '40', '42', '44'] },
-  { item: 'Silk Stole',       colors: ['Gold', 'Silver', 'Rust', 'Indigo'],               sizes: ['Free Size'] },
-  { item: 'Nightwear Set',    colors: ['Pink', 'Grey', 'Navy', 'Printed'],                sizes: ['S', 'M', 'L', 'XL'] },
-];
+// inventory (a Saree has no size, Kids Wear has its own size run). Defined in
+// inwardFixtures.js and imported, so makeInwards.js builds from exactly the
+// same catalogue this seed does.
 
-// Inbound only — MODULES also stamps item_location.module_type, whose ENUM has
-// no Delivery Challan (a challan removes stock, it is never its provenance).
-const MODULES = ['Purchase Inward', 'Job Slip', 'Pack Design', 'Sales Return'];
-const MODULE_PREFIX = { 'Purchase Inward': 'PI', 'Job Slip': 'JS', 'Pack Design': 'PD', 'Sales Return': 'SR' };
-
-// ── helpers ────────────────────────────────────────────────────────────────
-const pad = (n, w = 2) => String(n).padStart(w, '0');
-const rnd = (a) => a[Math.floor(Math.random() * a.length)];
-const rndInt = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+// The inbound module list and its id prefixes moved to inwardFixtures.js with
+// the generator that uses them.
 
 // ── generators ─────────────────────────────────────────────────────────────
 
-// Flow A feed. Ids are what the Add Item search box matches on (LIKE on id).
-function buildSourceTransactions() {
-  const rows = [];
-  for (const mod of MODULES) {
-    for (let i = 1; i <= 18; i++) {
-      const c = rnd(CATALOG);
-      rows.push([
-        `${MODULE_PREFIX[mod]}-2026-${pad(i, 4)}`,
-        mod,
-        c.item,
-        rnd(c.colors),
-        rnd(c.sizes),
-        rndInt(5, 90),
-      ]);
-    }
-  }
-  return rows;
-}
+// Flow A feed (inward documents, many lines each) lives in inwardFixtures.js —
+// shared with makeInwards.js, which adds documents to a database that already
+// has racks instead of rebuilding everything. Ids are what the Putaway search
+// box matches on (LIKE on id).
 
 // Flow C feed (delivery challans, with size runs) lives in challanFixtures.js
 // — shared with makeChallans.js, which adds challans to a database that already
@@ -152,12 +116,17 @@ async function main() {
   }
 
   // ── source transactions (Flow A feed) ──
-  const srcRows = buildSourceTransactions().map((r) => [org.id, ...r]);
+  // Multi-line documents, because that is what an inward is: a delivery of one
+  // or more designs across a run of sizes. Putaway fills its whole table from
+  // one document, so a one-line-per-document stub made the feature impossible
+  // to see working.
+  const srcRows = buildInwards(CATALOG, { count: 18 }).map((r) => [org.id, ...r]);
   await conn.query(
-    'INSERT INTO source_transaction (fk_org_id, id, module_type, item, color, size, qty) VALUES ?',
+    `INSERT INTO source_transaction ${INWARD_COLUMNS} VALUES ?`,
     [srcRows]
   );
-  console.log(`Seeded ${srcRows.length} source transactions for ${org.name}.`);
+  const inwardDocs = new Set(srcRows.map((r) => r[1].split('#')[0])).size;
+  console.log(`Seeded ${inwardDocs} inward documents (${srcRows.length} lines) for ${org.name}.`);
 
   // ── delivery challans (Flow C feed) ──
   // There is no seeded stock to build these from any more, so the catalogue

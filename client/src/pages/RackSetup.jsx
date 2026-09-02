@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
-import { countBins, countCapacity, nextRackRange } from '../lib/layout.js';
+import { countBins, countCapacity, nextRackRange, mergeGroups, rangeLabel } from '../lib/layout.js';
 
 // Rack layout setup.
 //
@@ -30,6 +30,8 @@ export default function RackSetup() {
   useEffect(() => { load().catch((e) => toast(e.message, 'error')); }, []);
 
   const groups = data?.groups ?? [];
+  // Batches of identical shape read as one kind of rack — see mergeGroups.
+  const rows = mergeGroups(groups);
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const projectedBins = countBins(form);
@@ -102,12 +104,12 @@ export default function RackSetup() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g) => (
-                    <tr key={g.id}>
-                      <td className="text-muted">{g.seq}</td>
+                  {rows.map((g, i) => (
+                    <tr key={g.key}>
+                      <td className="text-muted">{i + 1}</td>
                       <td className="font-600 text-primary-color">
                         {g.rack_count} <span className="text-muted font-400 text-xs">
-                          (R{g.rack_from}{g.rack_count > 1 ? `–R${g.rack_to}` : ''})
+                          ({rangeLabel(g.ranges)})
                         </span>
                       </td>
                       <td>{g.shelves}</td>
@@ -121,8 +123,10 @@ export default function RackSetup() {
               </table>
             </div>
             <p className="text-xs text-muted mt-3">
-              Each row is one batch you added. Racks are numbered in the order they were
-              added and never renumbered.
+              One row per kind of rack — batches with the same shelves, bins and capacity are
+              counted together, however many visits it took to add them. Change any one of those
+              three and it is a different kind of rack, listed separately. Racks are numbered in
+              the order they were added and never renumbered.
             </p>
           </div>
         </div>

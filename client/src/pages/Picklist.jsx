@@ -32,11 +32,11 @@ export default function Picklist() {
   const [mode, setMode] = useState('manual'); // 'manual' | 'module'
 
   // The challan is not recreated here — it already exists in the Vastra app.
-  // Manual entry is only its item details, transcribed to find the racks. The
-  // challan header (no / party / date) is therefore module-tab only, where it
-  // comes back from Vastra for free.
+  // Manual entry is only its item details, transcribed to find the racks, so the
+  // challan number is the one header field worth typing. Party was optional,
+  // never used to find anything, and is gone; the column still exists server-side
+  // so picklists recorded with one keep showing it in History.
   const [dcNo, setDcNo] = useState('');
-  const [party, setParty] = useState('');
   const [lines, setLines] = useState([]);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
@@ -152,7 +152,7 @@ export default function Picklist() {
       const res = mode === 'manual'
         // Pass the current id back so iterating on the same challan updates one
         // history entry rather than leaving a trail of abandoned ones.
-        ? await api.resolvePicklist({ dcNo: dcNo.trim() || null, party, lines, picklistId: detail?.id ?? null })
+        ? await api.resolvePicklist({ dcNo: dcNo.trim() || null, lines, picklistId: detail?.id ?? null })
         : await api.picklist(dc);
       setDetail(res);
       // Seed the boxes from the server's largest-rack-first suggestion.
@@ -209,7 +209,7 @@ export default function Picklist() {
       // a blank slate. Leaving the list up invites picking it a second time.
       setStock(await api.listItems());   // the catalogue's availability just changed
       setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
-      setDcNo(''); setParty('');
+      setDcNo('');
       clearPicklist();
     } catch (e) {
       toast(e.message, 'error');
@@ -246,7 +246,7 @@ export default function Picklist() {
 
   const switchMode = (m) => {
     setMode(m);
-    setDcNo(''); setParty('');
+    setDcNo('');
     setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
     clearPicklist();
   };
@@ -277,14 +277,13 @@ export default function Picklist() {
               {mode === 'manual' && (
                 <>
                   <p className="text-muted text-sm">Enter item details directly below.</p>
-                  <div className="grid cols-2 gap-col-4 mt-4">
+                  <div className="mt-4" style={{ maxWidth: 320 }}>
                     <Field label="Challan No" value={dcNo} placeholder="optional — for the history record"
                       onChange={(v) => { setDcNo(v); clearPicklist(); }} />
-                    <Field label="Party" value={party} placeholder="optional" onChange={setParty} />
                   </div>
                   <p className="text-xs text-muted">
-                    Both optional. Without a challan no. this picklist is listed in History as
-                    <span className="font-600"> #id</span> and is findable by its item names, party or
+                    Optional. Without a challan no. this picklist is listed in History as
+                    <span className="font-600"> #id</span> and is findable by its item names or
                     date — filling the challan no. in just gives you the number you already know it by.
                   </p>
                 </>
@@ -293,7 +292,7 @@ export default function Picklist() {
               {mode === 'module' && (
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Challan No <span className="required">*</span></label>
-                  <DcCombobox onSelect={(d) => { setDcNo(d.id); setParty(d.party || ''); clearPicklist(); }}
+                  <DcCombobox onSelect={(d) => { setDcNo(d.id); clearPicklist(); }}
                     onClear={() => { setDcNo(''); clearPicklist(); }} />
                   <p className="text-xs text-muted mt-1">
                     Reads delivery challans straight from Vastra. Not serving this module yet — use Manual Entry.
@@ -462,7 +461,6 @@ export default function Picklist() {
               {mode === 'module' && (
                 <>
                   <SummaryRow label="Challan No" value={dcNo || '—'} />
-                  <SummaryRow label="Party" value={party || '—'} />
                   <hr className="divider" />
                 </>
               )}

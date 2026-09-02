@@ -757,3 +757,17 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Putaway table ─────────────────────────────────────────────────────────
+   A whole inward at once: one row per line on the document, and inside the
+   rack cell one row per rack that line is being split across. */
+.putaway-table td { vertical-align: top; padding-top: 8px; padding-bottom: 8px; }
+.putaway-table input { padding: 5px 8px; font-size: 13px; }
+.putaway-alloc { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.putaway-alloc:last-of-type { margin-bottom: 4px; }
+.alloc-qty { width: 68px; text-align: center; }
+
+/* A line that landed, and one that did not. Tinted rather than outlined so a
+   long table still reads as a table. */
+.putaway-table tr.row-saved td { background: color-mix(in srgb, var(--success) 8%, transparent); }
+.putaway-table tr.row-error td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
