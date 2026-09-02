@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, setToken } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import QrSignIn from '../components/QrSignIn.jsx';
+import { extractOtp } from '../lib/otp.js';
 
 // Two ways in, both ending at the same place: an RMS session token from
 // /api/auth. Vastra is the identity provider either way — there is no password
@@ -18,6 +19,7 @@ export default function Login() {
   const [countryCode, setCountryCode] = useState('+91');
   const [mobile, setMobile] = useState('');
   const [otp, setOtp] = useState('');
+  const [autoFilled, setAutoFilled] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const send = async (isResend = 0) => {
@@ -27,6 +29,14 @@ export default function Login() {
       const { message } = await api.sendOtp(countryCode, mobile, isResend);
       toast(message || 'OTP sent', 'success');
       setStep('otp');
+
+      // Vastra's staging message carries the code itself, so put it in the box
+      // rather than making the tester retype what is already on their screen.
+      // extractOtp returns null unless it is sure, so when the message stops
+      // carrying a code this simply leaves the field empty. See lib/otp.js.
+      const code = extractOtp(message, mobile);
+      setOtp(code || '');
+      setAutoFilled(!!code);
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -131,7 +141,16 @@ export default function Login() {
               <div className="form-group">
                 <label className="form-label">OTP <span className="required">*</span></label>
                 <input className="form-control" inputMode="numeric" autoFocus placeholder="••••"
-                  value={otp} onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, ''))} />
+                  value={otp}
+                  onChange={(e) => { setOtp(e.target.value.replace(/[^0-9]/g, '')); setAutoFilled(false); }} />
+                {/* Say that it was filled in, so a wrong code is obviously a
+                    filled-in wrong code rather than something the user typed. */}
+                {autoFilled && (
+                  <p className="text-xs text-muted mt-1">
+                    <i className="fa-solid fa-wand-magic-sparkles" />&nbsp;
+                    Filled in from the message — staging only, edit it if it looks wrong.
+                  </p>
+                )}
               </div>
               <button className="btn btn-primary" type="submit" disabled={busy} style={{ width: '100%' }}>
                 {busy ? 'Verifying…' : 'Verify & sign in'}
@@ -139,7 +158,7 @@ export default function Login() {
               <div className="flex items-center gap-3 mt-4 text-sm">
                 <a href="#" onClick={(e) => { e.preventDefault(); send(1); }}>Resend OTP</a>
                 <span className="text-muted">·</span>
-                <a href="#" onClick={(e) => { e.preventDefault(); setStep('mobile'); setOtp(''); }}>
+                <a href="#" onClick={(e) => { e.preventDefault(); setStep('mobile'); setOtp(''); setAutoFilled(false); }}>
                   Change number
                 </a>
               </div>
