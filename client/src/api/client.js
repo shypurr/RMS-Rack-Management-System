@@ -47,12 +47,11 @@ export const api = {
   // when the organization grows, so they cannot address a row.
   getRack: (id) => request(`/racks/${id}`),
 
-  // Rack layout (setup screen). `preview` writes nothing; `apply` carries the
-  // version preview returned, so a layout edited in another tab is rejected
-  // rather than silently clobbered.
+  // Rack layout (setup screen). `addRacks` appends one batch of racks after the
+  // ones already there — it is the only call that changes the layout, and it
+  // cannot remove anything. Removing racks is a separate flow.
   layout: () => request('/layout'),
-  layoutPreview: (body) => request('/layout/preview', { method: 'POST', body }),
-  layoutApply: (body) => request('/layout/apply', { method: 'POST', body }),
+  addRacks: (body) => request('/layout/racks', { method: 'POST', body }),
 
   addItem: (payload) => request('/item-locations', { method: 'POST', body: payload }),
   findPlacements: (item, color = '', size = '') =>

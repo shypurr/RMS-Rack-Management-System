@@ -161,6 +161,113 @@ const MIGRATIONS = [
       return 'column added';
     },
   },
+
+  {
+    id: '2026-09-02-rack-groups',
+    note: 'convert base-grid + overrides into an ordered list of rack groups',
+
+    // Only for a database that already has bins but no rack_group rows to
+    // describe them.
+    //
+    // rack_group is created by the STANDING pass, which runs after this one
+    // (see applySchema in db.js). So on the very boot that deploys this change
+    // the table does not exist yet — treating that as "not needed" would record
+    // the migration as done and leave the existing racks permanently
+    // undescribed. A missing table means "definitely needed"; run() creates it.
+    async needed() {
+      if (!(await tableExists('rack_master'))) return false;
+      if ((await rowCount('rack_master')) === 0) return false;
+      if (!(await tableExists('rack_group'))) return true;
+      return (await rowCount('rack_group')) === 0;
+    },
+
+    // Rule 2 does not bite here: this migration WRITES rack_group and never
+    // touches rack_master, so the bins — and therefore the stock — are provably
+    // unaffected. It is safe on a populated database, which is the point.
+    //
+    // The groups are derived from the bins that actually exist, NOT from
+    // rack_layout/rack_group_override. Config and reality can disagree (an
+    // apply that half-failed, a hand-edited row), and it is the bins that the
+    // user sees and stores stock in. Deriving from them guarantees the screen
+    // describes the warehouse rather than a stale intention.
+    async run() {
+      // Create the table this migration fills, because the standing pass that
+      // normally creates it has not run yet on this boot. IF NOT EXISTS makes
+      // both orderings safe: whichever gets there first wins and the other is a
+      // no-op. Keep in step with the definition in migrations/layout.sql.
+      await pool.query(
+        `CREATE TABLE IF NOT EXISTS rack_group (
+           id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+           fk_org_id    INT NOT NULL,
+           seq          INT NOT NULL,
+           rack_from    INT NOT NULL,
+           rack_to      INT NOT NULL,
+           shelves      INT NOT NULL,
+           bins         INT NOT NULL,
+           bin_capacity INT NOT NULL,
+           created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           CONSTRAINT fk_rack_group_org FOREIGN KEY (fk_org_id)
+             REFERENCES organization(id) ON DELETE CASCADE,
+           CONSTRAINT chk_rack_group_range CHECK (rack_to >= rack_from AND rack_from > 0),
+           CONSTRAINT chk_rack_group_shape CHECK (shelves > 0 AND bins > 0 AND bin_capacity > 0),
+           INDEX idx_rack_group_org (fk_org_id, seq)
+         ) ENGINE=InnoDB`
+      );
+
+      // One row per rack: its shape, and whether every bin in it agrees on a
+      // capacity. MIN/MAX differing means the rack is not uniform and cannot be
+      // folded into a group with a single bin_capacity.
+      const [racks] = await pool.query(
+        `SELECT fk_org_id, rack_no,
+                MAX(shelf_no) AS shelves, MAX(bin_no) AS bins,
+                MIN(capacity) AS min_cap, MAX(capacity) AS max_cap,
+                COUNT(*) AS bin_count
+         FROM rack_master
+         GROUP BY fk_org_id, rack_no
+         ORDER BY fk_org_id, rack_no`
+      );
+
+      // Fold consecutive racks of an identical shape into one group. The
+      // algorithm lives in layoutService next to binsForGroup, its inverse, and
+      // is checked by checkLayout.js — it has to round-trip exactly or this
+      // migration would misdescribe a real warehouse.
+      const { coalesceRackGroups } = await import('./services/layoutService.js');
+      const groups = coalesceRackGroups(racks);
+
+      // seq restarts per organization — it is the order within one org's list.
+      const seqByOrg = new Map();
+      for (const g of groups) {
+        const seq = (seqByOrg.get(g.fk_org_id) || 0) + 1;
+        seqByOrg.set(g.fk_org_id, seq);
+        await pool.query(
+          `INSERT INTO rack_group
+             (fk_org_id, seq, rack_from, rack_to, shelves, bins, bin_capacity)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [g.fk_org_id, seq, g.rack_from, g.rack_to, g.shelves, g.bins, g.bin_capacity]
+        );
+      }
+
+      // The grid columns stop being written from here on, so they must stop
+      // being required. Dropping the CHECK first: it references the columns and
+      // would otherwise reject the NULLs the table can now hold.
+      // Both are tolerated as already-done — a database created after this
+      // change ships the new shape from layout.sql and has neither to alter.
+      try {
+        await pool.query('ALTER TABLE rack_layout DROP CHECK chk_layout_positive');
+      } catch (err) {
+        if (err.code !== 'ER_CHECK_NOT_FOUND' && err.errno !== 3940) throw err;
+      }
+      await pool.query(
+        `ALTER TABLE rack_layout
+           MODIFY racks INT NULL, MODIFY shelves INT NULL,
+           MODIFY bins INT NULL, MODIFY bin_capacity INT NULL`
+      );
+
+      const ragged = groups.filter((g) => !g.uniform).length;
+      return `${groups.length} group(s) across ${seqByOrg.size} org(s) from ${racks.length} rack(s)` +
+        (ragged ? `; ${ragged} ragged rack(s) kept as single-rack groups` : '');
+    },
+  },
 ];
 
 // ── the runner ────────────────────────────────────────────────────────────

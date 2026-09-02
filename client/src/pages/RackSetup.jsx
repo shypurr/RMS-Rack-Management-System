@@ -1,87 +1,59 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
-import { countBins, countCapacity, findOverlap } from '../lib/layout.js';
+import { countBins, countCapacity, nextRackRange } from '../lib/layout.js';
 
 // Rack layout setup.
 //
-// Two gates stand between the user and a destroyed bin. `preview` writes
-// nothing and reports what would change; if anything holds stock it refuses and
-// names it. Only then does the user see a count and a Yes button. Nothing is
-// ever removed silently — that is the whole contract of this screen.
+// One job: add racks. Press Add racks, say how many and how each is divided,
+// press Done, and they are appended after the ones already there. Come back
+// tomorrow with different numbers and those get appended too. The list above
+// the form is the history of what has been added.
+//
+// This replaced a "base layout" plus "racks that differ from the base" pair of
+// panels. It described the same warehouses accurately, but it asked the user to
+// think in exceptions before they could describe their own building. Nobody
+// should need to know what a base layout is to say "I have ten more racks".
+//
+// Nothing on this screen can remove or shrink a rack — the endpoint it calls
+// does not express deletion. Removing racks is its own flow, empty racks only.
+const EMPTY_FORM = { racks: '', shelves: '', bins: '', bin_capacity: '' };
+
 export default function RackSetup() {
   const toast = useToast();
-  const [form, setForm] = useState({ racks: 10, shelves: 3, bins: 5, bin_capacity: 100 });
-  const [overrides, setOverrides] = useState([]);
-  const [current, setCurrent] = useState(null);
-  const [preview, setPreview] = useState(null);   // null until previewed
+  const [data, setData] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
-    const data = await api.layout();
-    setCurrent(data);
-    if (data.layout) {
-      setForm({
-        racks: data.layout.racks, shelves: data.layout.shelves,
-        bins: data.layout.bins, bin_capacity: data.layout.bin_capacity,
-      });
-      setOverrides(data.overrides.map((o) => ({ ...o })));
-    }
-  };
+  const load = async () => setData(await api.layout());
   useEffect(() => { load().catch((e) => toast(e.message, 'error')); }, []);
 
-  // Any edit invalidates a preview — otherwise the user could preview one
-  // layout and then apply a different one.
-  const setField = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setPreview(null); };
-  const setOv = (i, k, v) => {
-    setOverrides((os) => os.map((o, j) => (j === i ? { ...o, [k]: v } : o)));
-    setPreview(null);
-  };
-  const addOverride = () => {
-    setOverrides((os) => [...os, {
-      rack_from: '', rack_to: '', shelves: form.shelves, bins: form.bins, bin_capacity: form.bin_capacity,
-    }]);
-    setPreview(null);
-  };
-  const removeOverride = (i) => {
-    setOverrides((os) => os.filter((_, j) => j !== i));
-    setPreview(null);
-  };
+  const groups = data?.groups ?? [];
+  const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const cleanOverrides = () => overrides
-    .filter((o) => o.rack_from && o.rack_to)
-    .map((o) => ({
-      rack_from: Number(o.rack_from), rack_to: Number(o.rack_to),
-      shelves: Number(o.shelves), bins: Number(o.bins), bin_capacity: Number(o.bin_capacity),
-    }));
+  const projectedBins = countBins(form);
+  const projectedCapacity = countCapacity(form);
+  const range = nextRackRange(groups, form.racks);
+  const complete = ['racks', 'shelves', 'bins', 'bin_capacity']
+    .every((k) => Number(form[k]) > 0);
 
-  const overlap = findOverlap(overrides);
-  const projected = countBins(form, overrides);
-  const projectedCapacity = countCapacity(form, overrides);
-  const sampleCode = current
-    ? `R${'1'.padStart(Math.max(2, String(Number(form.racks) || 1).length), '0')}-S01-B01`
-    : '';
+  const startAdding = () => { setForm(EMPTY_FORM); setAdding(true); };
+  const cancelAdding = () => { setForm(EMPTY_FORM); setAdding(false); };
 
-  const runPreview = async () => {
-    if (overlap) return toast(overlap, 'warning');
+  const done = async () => {
+    if (!complete) return toast('Fill in all four numbers', 'warning');
     setBusy(true);
     try {
-      setPreview(await api.layoutPreview({ ...form, overrides: cleanOverrides() }));
-    } catch (e) {
-      setPreview(null);
-      toast(e.message, 'error');
-    } finally { setBusy(false); }
-  };
-
-  const confirmApply = async () => {
-    setBusy(true);
-    try {
-      const res = await api.layoutApply({
-        ...form, overrides: cleanOverrides(), version: preview.version,
+      const res = await api.addRacks({
+        racks: Number(form.racks), shelves: Number(form.shelves),
+        bins: Number(form.bins), bin_capacity: Number(form.bin_capacity),
       });
-      toast(`Layout applied — ${res.added} bins added, ${res.removed} removed`, 'success');
-      setPreview(null);
+      toast(
+        `${res.racks} rack${res.racks > 1 ? 's' : ''} added (R${res.rack_from}–R${res.rack_to}) — ${res.added.toLocaleString()} bins`,
+        'success'
+      );
+      cancelAdding();
       await load();
     } catch (e) {
       toast(e.message, 'error');
@@ -94,192 +66,131 @@ export default function RackSetup() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Rack Setup</h1>
-          <p className="page-subtitle">
-            Define how many racks you have, and how each one is divided into shelves and bins
-          </p>
+          <p className="page-subtitle">Add racks to your warehouse, a batch at a time</p>
         </div>
       </div>
 
-      {current && (
+      {data && (
         <div className="card mb-4">
           <div className="card-body" style={{ padding: '14px 20px' }}>
-            {current.configured ? (
+            {data.configured ? (
               <div className="flex gap-6 flex-wrap items-center text-sm">
-                <span><strong>{current.counts.racks}</strong> racks</span>
-                <span><strong>{current.counts.bins}</strong> bins</span>
-                <span><strong>{current.counts.capacity}</strong> total capacity</span>
-                <span className="text-muted ml-auto">Bins numbered like {sampleCode}</span>
+                <span><strong>{data.counts.racks.toLocaleString()}</strong> racks</span>
+                <span><strong>{data.counts.bins.toLocaleString()}</strong> bins</span>
+                <span><strong>{data.counts.capacity.toLocaleString()}</strong> total capacity</span>
               </div>
             ) : (
               <div className="text-sm">
-                No racks configured yet. Fill in the four numbers below and press Preview.
+                No racks yet. Press <strong>Add racks</strong> to set up your first batch.
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Base grid */}
-      <div className="card mb-4">
-        <div className="card-header"><span className="card-title">Base layout</span></div>
-        <div className="card-body">
-          <div className="grid cols-4 gap-col-4">
-            <Field label="Total racks" value={form.racks} onChange={(v) => setField('racks', v)} />
-            <Field label="Shelves per rack" value={form.shelves} onChange={(v) => setField('shelves', v)} />
-            <Field label="Bins per shelf" value={form.bins} onChange={(v) => setField('bins', v)} />
-            <Field label="Capacity per bin" value={form.bin_capacity} onChange={(v) => setField('bin_capacity', v)} />
-          </div>
-          <p className="text-sm text-muted mt-4">
-            This makes <strong>{projected.toLocaleString()}</strong> bins. Capacity per bin is how
-            many units fit inside one bin — not how many bins there are.
-          </p>
-          <p className="text-sm text-muted mt-1">
-            Total capacity is <strong>{projectedCapacity.toLocaleString()}</strong> units.
-          </p>
-        </div>
-      </div>
-
-      {/* Group overrides */}
-      <div className="card mb-4">
-        <div className="card-header">
-          <span className="card-title">Racks that differ</span>
-          <button className="btn btn-outline btn-sm ml-auto" onClick={addOverride}>
-            <i className="fa-solid fa-plus" />&nbsp; Add a group
-          </button>
-        </div>
-        <div className="card-body">
-          {overrides.length === 0 ? (
-            <p className="text-sm text-muted">
-              All {form.racks || 0} racks use the base layout. Add a group if a block of racks is a
-              different model — for example racks 291–300 with 5 shelves and 13 bins each.
+      {/* What has been added so far, in the order it was added. */}
+      {groups.length > 0 && (
+        <div className="card mb-4">
+          <div className="card-header"><span className="card-title">Your racks</span></div>
+          <div className="card-body">
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 40 }}>#</th><th>Racks</th><th>Shelves per rack</th>
+                    <th>Bins per shelf</th><th>Capacity per bin</th><th>Bins</th><th>Capacity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <tr key={g.id}>
+                      <td className="text-muted">{g.seq}</td>
+                      <td className="font-600 text-primary-color">
+                        {g.rack_count} <span className="text-muted font-400 text-xs">
+                          (R{g.rack_from}{g.rack_count > 1 ? `–R${g.rack_to}` : ''})
+                        </span>
+                      </td>
+                      <td>{g.shelves}</td>
+                      <td>{g.bins}</td>
+                      <td>{g.bin_capacity}</td>
+                      <td>{g.bin_count.toLocaleString()}</td>
+                      <td>{g.capacity.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted mt-3">
+              Each row is one batch you added. Racks are numbered in the order they were
+              added and never renumbered.
             </p>
-          ) : (
-            <>
-              {overrides.map((o, i) => (
-                <div key={i} className="flex gap-3 flex-wrap items-end mb-4">
-                  <Field small label="From rack" value={o.rack_from} onChange={(v) => setOv(i, 'rack_from', v)} />
-                  <Field small label="To rack" value={o.rack_to} onChange={(v) => setOv(i, 'rack_to', v)} />
-                  <Field small label="Shelves" value={o.shelves} onChange={(v) => setOv(i, 'shelves', v)} />
-                  <Field small label="Bins/shelf" value={o.bins} onChange={(v) => setOv(i, 'bins', v)} />
-                  <Field small label="Capacity" value={o.bin_capacity} onChange={(v) => setOv(i, 'bin_capacity', v)} />
-                  <button className="btn btn-ghost btn-sm" onClick={() => removeOverride(i)} title="Remove group">
-                    <i className="fa-solid fa-trash" />
-                  </button>
-                </div>
-              ))}
-              <p className="text-xs text-muted">
-                A group keeps its own shape. Changing the base layout above will not alter these racks.
-              </p>
-              {overlap && (
-                <p className="text-sm mt-4" style={{ color: 'var(--danger)' }}>
-                  <i className="fa-solid fa-triangle-exclamation" />&nbsp; {overlap}
-                </p>
-              )}
-            </>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex gap-3 mb-4">
-        <button className="btn btn-primary" onClick={runPreview} disabled={busy || !!overlap}>
-          <i className="fa-solid fa-magnifying-glass" />&nbsp; Preview changes
+      {!adding ? (
+        <button className="btn btn-primary" onClick={startAdding} disabled={!data}>
+          <i className="fa-solid fa-plus" />&nbsp; Add racks
         </button>
-      </div>
+      ) : (
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">
+              <i className="fa-solid fa-plus text-primary-color" />&nbsp; Add racks
+            </span>
+          </div>
+          <div className="card-body">
+            <div className="grid cols-4 gap-col-4">
+              <Field label="Number of racks" value={form.racks} autoFocus
+                onChange={(v) => setField('racks', v)} />
+              <Field label="Shelves per rack" value={form.shelves}
+                onChange={(v) => setField('shelves', v)} />
+              <Field label="Bins per shelf" value={form.bins}
+                onChange={(v) => setField('bins', v)} />
+              <Field label="Capacity per bin" value={form.bin_capacity}
+                onChange={(v) => setField('bin_capacity', v)} />
+            </div>
 
-      {preview && (
-        <PreviewPanel
-          preview={preview}
-          busy={busy}
-          onApply={confirmApply}
-          onCancel={() => setPreview(null)}
-        />
+            {/* The size of the thing, before it happens. Done applies straight
+                away, so this line is where a mistyped extra zero gets caught. */}
+            {complete ? (
+              <>
+                <p className="text-sm text-muted mt-4">
+                  This adds <strong>{form.racks}</strong> rack{Number(form.racks) > 1 ? 's' : ''}
+                  {range && <> numbered <strong>R{range.from}{range.to > range.from ? `–R${range.to}` : ''}</strong></>},
+                  making <strong>{projectedBins.toLocaleString()}</strong> bins. Capacity per bin is how
+                  many units fit inside one bin — not how many bins there are.
+                </p>
+                <p className="text-sm text-muted mt-1">
+                  That is <strong>{projectedCapacity.toLocaleString()}</strong> units of extra space.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted mt-4">Fill in all four numbers to see what this adds.</p>
+            )}
+
+            <div className="flex gap-3 mt-4">
+              <button className="btn btn-primary" onClick={done} disabled={busy || !complete}>
+                <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-check'}`} />
+                &nbsp; {busy ? 'Adding…' : 'Done'}
+              </button>
+              <button className="btn btn-ghost" onClick={cancelAdding} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
 }
 
-// Three outcomes, three different things to say. "Blocked" is not a warning the
-// user can click past — it carries no apply button at all.
-function PreviewPanel({ preview, busy, onApply, onCancel }) {
-  if (preview.blockers.length) {
-    return (
-      <div className="card" style={{ borderLeft: '4px solid var(--danger)' }}>
-        <div className="card-header">
-          <span className="card-title" style={{ color: 'var(--danger)' }}>
-            <i className="fa-solid fa-ban" />&nbsp; Cannot apply — {preview.blockers.length} bin(s) in the way
-          </span>
-        </div>
-        <div className="card-body">
-          <p className="text-sm mb-4"><strong>Nothing has been changed.</strong> These bins block it:</p>
-          <div className="data-table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Bin</th><th>Problem</th></tr></thead>
-              <tbody>
-                {preview.blockers.map((b) => (
-                  <tr key={`${b.rack_no}-${b.shelf_no}-${b.bin_no}`}>
-                    <td className="font-600 text-primary-color">
-                      R{b.rack_no}-S{b.shelf_no}-B{b.bin_no}
-                    </td>
-                    <td>
-                      {b.kind === 'occupied'
-                        ? `Holds ${b.used} units — this change would delete the bin`
-                        : `Holds ${b.used} units but the new capacity is only ${b.capacity}`}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-sm text-muted mt-4">Move this stock elsewhere, then preview again.</p>
-          <div className="flex gap-3 mt-4">
-            <Link className="btn btn-primary" to="/move">Go to Move Item</Link>
-            <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const destructive = preview.remove > 0;
+function Field({ label, value, onChange, autoFocus }) {
   return (
-    <div className="card" style={{ borderLeft: `4px solid var(--${destructive ? 'warning' : 'success'})` }}>
-      <div className="card-header">
-        <span className="card-title">
-          <i className={`fa-solid fa-${destructive ? 'triangle-exclamation' : 'circle-check'}`} />
-          &nbsp; {destructive ? 'Confirm — this deletes bins' : 'Confirm changes'}
-        </span>
-      </div>
-      <div className="card-body">
-        <div className="flex gap-6 flex-wrap mb-4 text-sm">
-          <span><strong>{preview.add}</strong> bins added</span>
-          <span><strong>{preview.remove}</strong> bins deleted</span>
-          <span><strong>{preview.keep}</strong> bins kept</span>
-          <span className="text-muted">{preview.counts.bins.toLocaleString()} bins afterwards</span>
-        </div>
-        {destructive && (
-          <p className="text-sm mb-4">
-            The {preview.remove} bins being deleted are all empty, so no stock will be lost.
-            This cannot be undone.
-          </p>
-        )}
-        <div className="flex gap-3">
-          <button className="btn btn-primary" onClick={onApply} disabled={busy}>
-            {destructive ? `Yes, delete ${preview.remove} bins and apply` : 'Apply'}
-          </button>
-          <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, value, onChange, small }) {
-  return (
-    <div style={small ? { width: 110 } : undefined}>
+    <div>
       <label className="form-label">{label}</label>
       <input
-        type="number" min="1" className="form-control" value={value}
-        onChange={(e) => onChange(e.target.value)}
+        type="number" min="1" className="form-control" value={value} autoFocus={autoFocus}
+        placeholder="0"
+        onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
       />
     </div>
   );

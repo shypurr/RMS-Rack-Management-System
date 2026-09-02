@@ -17,46 +17,31 @@ export function useLayoutStatus() {
   return state;
 }
 
-// Total bins a base grid plus its overrides would produce. Used for the live
-// "this makes N bins" line, so the number is visible before previewing.
-export function countBins(form, overrides) {
-  const racks = Number(form.racks) || 0;
-  let n = 0;
-  for (let r = 1; r <= racks; r++) {
-    const hit = overrides.find((o) => r >= Number(o.rack_from) && r <= Number(o.rack_to));
-    n += (Number(hit?.shelves ?? form.shelves) || 0) * (Number(hit?.bins ?? form.bins) || 0);
-  }
-  return n;
+// What one batch of racks would produce. Shown live under the form so the size
+// of the thing is on screen BEFORE the user presses Done — which is the whole
+// safety story now that adding is immediate and there is no preview step.
+//
+// A batch is uniform (every rack the same shape), so unlike the old base-plus-
+// overrides model these are a plain multiplication rather than a walk.
+export function countBins({ racks, shelves, bins }) {
+  return (Number(racks) || 0) * (Number(shelves) || 0) * (Number(bins) || 0);
 }
 
-// Total units the same grid would hold. Deliberately walks the racks the way
-// countBins does rather than multiplying its result by form.bin_capacity: an
-// override may set its own capacity per bin, and racks outside it keep the base
-// one, so there is no single multiplier. Display only — the server computes the
-// real figure as SUM(rack_master.capacity) once the layout is applied.
-export function countCapacity(form, overrides) {
-  const racks = Number(form.racks) || 0;
-  let n = 0;
-  for (let r = 1; r <= racks; r++) {
-    const hit = overrides.find((o) => r >= Number(o.rack_from) && r <= Number(o.rack_to));
-    n += (Number(hit?.shelves ?? form.shelves) || 0)
-       * (Number(hit?.bins ?? form.bins) || 0)
-       * (Number(hit?.bin_capacity ?? form.bin_capacity) || 0);
-  }
-  return n;
+export function countCapacity({ racks, shelves, bins, bin_capacity }) {
+  return countBins({ racks, shelves, bins }) * (Number(bin_capacity) || 0);
 }
 
-// Ranges may not overlap — the server rejects them, but catching it here means
-// the user sees it while typing instead of after a round trip.
-export function findOverlap(overrides) {
-  const sorted = [...overrides]
-    .map((o) => ({ from: Number(o.rack_from), to: Number(o.rack_to) }))
-    .filter((o) => o.from && o.to)
-    .sort((a, b) => a.from - b.from);
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].from <= sorted[i - 1].to) {
-      return `Ranges ${sorted[i - 1].from}–${sorted[i - 1].to} and ${sorted[i].from}–${sorted[i].to} overlap`;
-    }
-  }
-  return null;
+// Where this batch's racks will land. Racks are only ever appended, so the next
+// one is the highest that exists plus one — never a count of them: once the
+// remove-racks flow can leave a gap in the numbering the two stop agreeing, and
+// the server computes this from MAX(rack_no) for exactly that reason.
+export function highestRackNo(groups = []) {
+  return groups.reduce((max, g) => Math.max(max, Number(g.rack_to) || 0), 0);
+}
+
+export function nextRackRange(groups, racks) {
+  const n = Number(racks) || 0;
+  if (n <= 0) return null;
+  const from = highestRackNo(groups) + 1;
+  return { from, to: from + n - 1 };
 }

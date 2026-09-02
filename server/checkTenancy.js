@@ -13,7 +13,7 @@ if (await pingDb()) {
 }
 await applyAuthSchema();
 
-const { applyLayout } = await import('./src/services/layoutService.js');
+const { addRacks } = await import('./src/services/layoutService.js');
 const { listRacks, addItem, getRackWithItems, findPlacements, moveItem, updateItemQty } =
   await import('./src/services/rackService.js');
 const { getDashboard } = await import('./src/services/dashboardService.js');
@@ -30,8 +30,8 @@ const A = await makeOrg('checktenancy-a', 'Org A');
 const B = await makeOrg('checktenancy-b', 'Org B');
 
 // Deliberately different layouts — this is the whole point of the feature.
-await applyLayout(A, { racks: 2, shelves: 2, bins: 2, bin_capacity: 100, overrides: [], version: 1, userId: 'a' });
-await applyLayout(B, { racks: 5, shelves: 1, bins: 1, bin_capacity: 50, overrides: [], version: 1, userId: 'b' });
+await addRacks(A, { racks: 2, shelves: 2, bins: 2, bin_capacity: 100, userId: 'a' });
+await addRacks(B, { racks: 5, shelves: 1, bins: 1, bin_capacity: 50, userId: 'b' });
 
 const racksA = await listRacks(A);
 const racksB = await listRacks(B);
