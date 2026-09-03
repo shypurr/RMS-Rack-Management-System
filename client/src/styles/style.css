@@ -783,3 +783,10 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
   color: var(--text-muted); text-align: left; padding: 4px 8px;
 }
 .nested-table td { padding: 5px 8px; border-top: 1px solid var(--border); font-size: 13px; }
+
+/* Putaway: a counted quantity that differs from what the inward claimed. Not an
+   error — short and over deliveries are normal — but it should be visible. */
+.qty-corrected { color: var(--warning); margin-top: 3px; white-space: nowrap; }
+
+/* Putaway: this rack was suggested because the same product is already in it. */
+.consolidated-hint { color: var(--success); }

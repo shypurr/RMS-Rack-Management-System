@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { MODULE_TYPES, sortByEmptiness } from '../lib/rack.js';
+import { num, allocatedOn, remainingOn, allocCeiling, withQty,
+         suggestRacks, indexPlacements } from '../lib/putaway.js';
 
 // Putaway (Flow A): stock arriving from a source module, or entered by hand,
 // placed into racks.
@@ -23,10 +25,18 @@ import { MODULE_TYPES, sortByEmptiness } from '../lib/rack.js';
 // the part before the "#" is the document either way.
 const docNo = (id) => String(id ?? '').split('#')[0];
 
+// The stub feed orders by id, and id is a STRING — so a ten-line document comes
+// back #1, #10, #2, #3… and the table showed line 10 in third place. Sorting on
+// the numeric suffix puts the document back in document order, which is the
+// order the goods are physically stacked in. Live Vastra rows carry no "#" and
+// all yield 0, leaving their existing order untouched.
+const lineNo = (id) => Number(String(id ?? '').split('#')[1]) || 0;
+
 let seq = 0;
 const newRow = (patch = {}) => ({
   key: `row-${++seq}`,
   item: '', color: '', size: '', qty: '',
+  docQty: null,
   moduleType: null, moduleId: null,
   // Where this line is going. One entry per rack; a line needing three bins has
   // three. Starts with one blank so there is always something to fill in.
@@ -38,9 +48,6 @@ const newRow = (patch = {}) => ({
 
 const newAlloc = () => ({ key: `a-${++seq}`, rackId: null, qty: '' });
 
-const num = (v) => Number(v) || 0;
-const allocatedOn = (row) => row.allocs.reduce((s, a) => s + num(a.qty), 0);
-const remainingOn = (row) => Math.max(0, num(row.qty) - allocatedOn(row));
 
 export default function AddItem() {
   const toast = useToast();
@@ -55,13 +62,30 @@ export default function AddItem() {
   const [txnResetKey, setTxnResetKey] = useState(0); // bump to remount/clear the combobox
   const [loadingDoc, setLoadingDoc] = useState(false);
 
-  const loadRacks = () => api.listRacks().then(setRacks).catch((e) => toast(e.message, 'error'));
+  // Racks for the pickers; stock so the suggester can put a product back where
+  // that product already lives instead of scattering it a little further with
+  // every delivery.
+  const [stock, setStock] = useState([]);
+  const loadRacks = () => Promise.all([api.listRacks(), api.listItems()])
+    .then(([r, s]) => { setRacks(r); setStock(s); })
+    .catch((e) => toast(e.message, 'error'));
   useEffect(() => { loadRacks(); }, []);
 
   const rackById = useMemo(() => new Map(racks.map((r) => [r.id, r])), [racks]);
   // Sorted once, not once per rack box: a warehouse can hold thousands of bins
   // and a ten-line inward renders a picker for every allocation on every row.
   const rackCandidates = useMemo(() => sortByEmptiness(racks), [racks]);
+  const placements = useMemo(() => indexPlacements(stock), [stock]);
+
+  // Fills in every line that still needs racks. A starting point, not a
+  // decision — every box it touches stays editable, and anything already chosen
+  // by hand is left exactly as it is.
+  const suggest = () => {
+    const next = suggestRacks(rows, racks, placements);
+    setRows(next);
+    const short = next.filter((r) => r.item.trim() && num(r.qty) > 0 && remainingOn(r) > 0).length;
+    if (short) toast(`${short} line(s) could not be fully placed — not enough free space`, 'warning');
+  };
 
   // ── row plumbing ────────────────────────────────────────────────────────
   const patchRow = (key, patch) =>
@@ -86,10 +110,14 @@ export default function AddItem() {
   const addRow = () => setRows((rs) => [...rs, newRow()]);
   const removeRow = (key) => setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : rs));
 
-  // A quantity box for one rack may never take the line past its own total —
-  // "when all 90 are placed you cannot add another rack". The ceiling for a box
-  // is therefore whatever is unallocated plus whatever that box already holds.
-  const allocCeiling = (row, alloc) => Math.max(0, num(row.qty) - allocatedOn(row) + num(alloc.qty));
+  // Quantity stays editable even on a line that came from a document. The
+  // inward says what was EXPECTED; the warehouse counts what actually turned
+  // up, and short or over deliveries are normal. Forcing the document's number
+  // through would record a quantity nobody ever received. Item, colour and size
+  // stay locked — those identify the goods, and retyping them is how a line
+  // silently stops matching the inward it came from.
+  const setRowQty = (key, raw) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? withQty(r, raw) : r)));
 
   const setAllocQty = (row, alloc, raw) => {
     if (raw === '') return patchAlloc(row.key, alloc.key, { qty: '' });
@@ -110,11 +138,15 @@ export default function AddItem() {
       // query, so this gets all of the document's lines rather than whatever
       // fitted in the dropdown's page.
       const all = await api.sourceTransactions(moduleType, id, 100);
-      const lines = all.filter((t) => docNo(t.id) === id);
+      const lines = all.filter((t) => docNo(t.id) === id).sort((a, b) => lineNo(a.id) - lineNo(b.id));
       if (!lines.length) throw new Error(`No lines found on ${id}`);
       setRows(lines.map((t) => newRow({
         item: t.item ?? '', color: t.color ?? '', size: t.size ?? '',
-        qty: String(t.qty ?? ''), moduleType: t.module_type ?? moduleType, moduleId: id,
+        qty: String(t.qty ?? ''),
+        // What the inward claimed, kept so an edited count reads as a
+        // deliberate correction rather than looking like the document's number.
+        docQty: t.qty ?? null,
+        moduleType: t.module_type ?? moduleType, moduleId: id,
       })));
       toast(`${id} — ${lines.length} item${lines.length > 1 ? 's' : ''} loaded`, 'success');
     } catch (e) {
@@ -141,6 +173,7 @@ export default function AddItem() {
   const ready = rows.filter((r) => r.item.trim() && num(r.qty) > 0 && !r.saved);
   const placeable = ready.filter((r) => r.allocs.some((a) => a.rackId && num(a.qty) > 0));
   const anyUnderAllocated = ready.some((r) => remainingOn(r) > 0);
+  const needsRacks = ready.filter((r) => remainingOn(r) > 0).length;
 
   const saveAll = async () => {
     if (!placeable.length) return toast('Nothing to put away — fill in an item, a quantity and a rack', 'warning');
@@ -258,6 +291,7 @@ export default function AddItem() {
                         row={row} index={i} locked={!!row.moduleId}
                         racks={rackCandidates} rackById={rackById}
                         onPatch={(patch) => patchRow(row.key, patch)}
+                        onSetQty={(v) => setRowQty(row.key, v)}
                         onPatchAlloc={(ak, patch) => patchAlloc(row.key, ak, patch)}
                         onSetAllocQty={(a, v) => setAllocQty(row, a, v)}
                         ceilingFor={(a) => allocCeiling(row, a)}
@@ -275,6 +309,13 @@ export default function AddItem() {
                 <button className="btn btn-ghost btn-sm" onClick={addRow}>
                   <i className="fa-solid fa-plus" />&nbsp; Add item
                 </button>
+                {needsRacks > 0 && (
+                  <button className="btn btn-outline btn-sm" onClick={suggest}
+                    title="Fill in racks for every line that still needs them">
+                    <i className="fa-solid fa-wand-magic-sparkles" />
+                    &nbsp; Suggest racks for {needsRacks} line{needsRacks > 1 ? 's' : ''}
+                  </button>
+                )}
                 {anyUnderAllocated && (
                   <span className="text-xs text-muted">
                     A line is not put away until its whole quantity has a rack.
@@ -324,7 +365,7 @@ export default function AddItem() {
 // One line of the inward: what it is, how many, and which racks it goes into.
 function Row({
   row, index, locked, racks, rackById,
-  onPatch, onSetAllocQty, onPatchAlloc, ceilingFor,
+  onPatch, onSetQty, onSetAllocQty, onPatchAlloc, ceilingFor,
   onAddAlloc, onRemoveAlloc, onRemove, canRemove,
 }) {
   const allocated = allocatedOn(row);
@@ -353,9 +394,11 @@ function Row({
           onChange={(e) => onPatch({ size: e.target.value })} />
       </td>
       <td>
-        <input className="form-control" type="number" min="1" placeholder="0" value={row.qty}
-          readOnly={locked} style={locked ? { background: 'var(--bg)' } : undefined}
-          onChange={(e) => onPatch({ qty: e.target.value.replace(/[^0-9]/g, '') })} />
+        <input className="form-control" type="number" min="0" placeholder="0" value={row.qty}
+          onChange={(e) => onSetQty(e.target.value.replace(/[^0-9]/g, ''))} />
+        {row.docQty != null && num(row.qty) !== num(row.docQty) && (
+          <div className="text-xs qty-corrected">inward said {row.docQty}</div>
+        )}
       </td>
       <td>
         {row.allocs.map((a) => {
@@ -369,7 +412,7 @@ function Row({
                 <RackCombobox
                   candidates={racks}
                   value={a.rackId}
-                  onChange={(id) => onPatchAlloc(a.key, { rackId: id || null })}
+                  onChange={(id) => onPatchAlloc(a.key, { rackId: id || null, consolidated: false })}
                 />
               </div>
               <input className="form-control alloc-qty" type="number" min="0" placeholder="0"
@@ -383,6 +426,13 @@ function Row({
               {tooBig && (
                 <span className="text-xs text-danger" style={{ whiteSpace: 'nowrap' }}>
                   only {rack.available} free
+                </span>
+              )}
+              {/* Why the suggester chose this one — the same product is already
+                  there, so this keeps it together rather than scattering it. */}
+              {a.consolidated && !tooBig && (
+                <span className="text-xs consolidated-hint" style={{ whiteSpace: 'nowrap' }}>
+                  <i className="fa-solid fa-layer-group" />&nbsp; already here
                 </span>
               )}
             </div>
