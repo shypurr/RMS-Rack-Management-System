@@ -798,3 +798,19 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 
 /* Rack Management is read-only: the quantity is a fact, not a field. */
 .bin-qty-value { font-size: 14px; }
+
+/* Spinners: keep them turning.
+   Font Awesome deliberately freezes .fa-spin when the machine has animations
+   switched off (Windows 11: Settings → Accessibility → Visual effects →
+   Animation effects; it clears the ClientAreaAnimation bit, and the browser
+   then reports prefers-reduced-motion: reduce). For decorative motion that is
+   correct. For a "saving…" spinner it is exactly wrong: a frozen spinner is
+   what a hung page looks like, and ruling that out is the only reason the icon
+   is on screen. So we drive the rotation ourselves. Under reduced motion we
+   slow it down rather than stop it — same choice Bootstrap makes for
+   .spinner-border. */
+@keyframes rms-spin { to { transform: rotate(360deg); } }
+.fa-spin { animation: rms-spin .9s linear infinite !important; }
+@media (prefers-reduced-motion: reduce) {
+  .fa-spin { animation-duration: 1.8s !important; }
+}

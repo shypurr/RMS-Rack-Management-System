@@ -593,17 +593,23 @@ function DocCombobox({ moduleType, onSelect, onClear }) {
 // less everything the rest of this table has already promised it — and what is
 // sitting in it, so choosing where a box goes does not need a second screen.
 function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange }) {
-  const [query, setQuery] = useState('');
+  // `typed` is null whenever nobody is mid-search, and the box then shows the
+  // rack that is actually CHOSEN. It used to keep its text in its own state and
+  // write it only when a human clicked an option — so "Choose racks for me",
+  // which sets the rack from outside, filled four racks and left four boxes
+  // still reading "Search rack…" behind it. The choice was real and would have
+  // saved correctly; the screen simply never said what it was.
+  const [typed, setTyped] = useState(null);
   const [open, setOpen] = useState(false);
-  const [picked, setPicked] = useState(false);
   const blurTimer = useRef(null);
 
-  // A cleared selection from the parent (new row, document swapped) has to clear
-  // the text too, or the box keeps showing a rack that is no longer chosen.
-  useEffect(() => { if (!value && picked) { setPicked(false); setQuery(''); } }, [value]);
+  const chosen = value ? candidates.find((r) => r.id === value) : null;
+  const text = typed ?? (chosen ? chosen.rack_id : '');
 
-  const q = query.trim().toLowerCase();
-  const pool = picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q));
+  const q = String(typed ?? '').trim().toLowerCase();
+  const pool = typed === null
+    ? candidates
+    : candidates.filter((r) => r.rack_id.toLowerCase().includes(q));
   // Racks this table has already filled sink to the bottom rather than
   // disappearing — a full one is still worth seeing, with its reason.
   const matches = pool
@@ -611,8 +617,13 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
     .sort((a, b) => b.room - a.room)
     .slice(0, 8);
 
-  const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.id); };
-  const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
+  const choose = (r) => { setTyped(null); setOpen(false); onChange(r.id); };
+  // Typing over a chosen rack un-chooses it: the box must never show one rack
+  // and mean another.
+  const onType = (v) => { if (value) onChange(''); setTyped(v); setOpen(true); };
+  // Clicking away mid-search puts the chosen rack back, instead of leaving
+  // half-typed text that matches nothing that is selected.
+  const close = () => { setOpen(false); setTyped(null); };
 
   // What is stored in a rack, in a phrase. Two products named, the rest counted.
   const holdsText = (id) => {
@@ -629,10 +640,10 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
       <input
         className="form-control"
         placeholder="Search rack…"
-        value={query}
+        value={text}
         onChange={(e) => onType(e.target.value)}
         onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
-        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
+        onBlur={() => { blurTimer.current = setTimeout(close, 150); }}
       />
       {open && (
         <div className="txn-dropdown">
