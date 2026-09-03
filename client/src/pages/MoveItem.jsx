@@ -54,6 +54,13 @@ export default function MoveItem() {
   const destCandidates = sortByEmptiness(racks.filter((r) => r.id !== source?.fk_rack_id));
   const destRack = racks.find((r) => r.id === toRackId);
 
+  // The quantity box holds text while it is being typed, and can be empty or
+  // hold more than the rack has. Every sum in the picture below reads this
+  // instead, so a half-typed box shows 0 rather than NaN, and typing 500 where
+  // 5 are stored does not draw "5 left after: -495". The real limit is still
+  // enforced in doMove and again on the server.
+  const moving = Math.max(0, Math.min(Number(qty) || 0, source?.qty ?? 0));
+
   const reset = () => { setVariant(null); setPlacements([]); setSource(null); setToRackId(null); setQty(1); setSearch(''); };
 
   const doMove = async () => {
@@ -110,9 +117,14 @@ export default function MoveItem() {
           </div>
         </div>
 
-        {/* Step 2 — pick source rack + qty */}
-        <div className="card">
-          <div className="card-header"><span className="card-title"><i className="fa-solid fa-location-dot text-primary-color" />&nbsp; Step 2 — Source Rack</span></div>
+        {/* Step 2 — where it is now, how many, and where it is going.
+            Choosing a destination used to be a third card BELOW this pair, so
+            picking the rack to move to meant scrolling away from the rack you
+            had just picked to move from. The whole decision is one thought and
+            now lives in one card.
+            overflow:visible so the rack dropdown is not clipped by the card. */}
+        <div className="card" style={{ overflow: 'visible' }}>
+          <div className="card-header"><span className="card-title"><i className="fa-solid fa-location-dot text-primary-color" />&nbsp; Step 2 — Move it</span></div>
           <div className="card-body">
             {!variant ? (
               <div className="empty-state"><i className="fa-solid fa-hand-pointer" /><p>Select an item first</p></div>
@@ -136,10 +148,23 @@ export default function MoveItem() {
                   })}
                 </div>
                 {source && (
-                  <div className="form-group">
-                    <label className="form-label">Quantity to Move (max {source.qty})</label>
-                    <input className="form-control" type="number" min="1" max={source.qty} value={qty} onChange={(e) => setQty(e.target.value)} />
-                  </div>
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">How many to move (most you can is {source.qty})</label>
+                      <input className="form-control" type="number" min="1" max={source.qty} value={qty} onChange={(e) => setQty(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Move it to (emptiest racks first)</label>
+                      <RackCombobox key={source.id} candidates={destCandidates} value={toRackId} onChange={setToRackId} />
+                    </div>
+                    {/* The button belongs with the boxes that decide what it
+                        does, not under the picture below — that card only shows
+                        what is about to happen. */}
+                    <button className="btn btn-primary" onClick={doMove} disabled={!toRackId}>
+                      <i className="fa-solid fa-check" />&nbsp;
+                      Move {moving} × {variant.item} → {destRack?.rack_id || 'rack'}
+                    </button>
+                  </>
                 )}
               </>
             )}
@@ -147,35 +172,54 @@ export default function MoveItem() {
         </div>
       </div>
 
-      {/* Step 3 — destination */}
+      {/* No heading on purpose. This is not a third step to work through — it
+          is a picture of what the two cards above are about to do, so a title
+          numbering it would send people looking for something else to fill in.
+          It appears as soon as a rack is chosen to move from, and fills in the
+          right-hand side once a destination is picked. */}
       {source && (
-        <div className="card mt-4" style={{ overflow: 'visible' }}>
-          <div className="card-header"><span className="card-title"><i className="fa-solid fa-layer-group text-primary-color" />&nbsp; Step 3 — Destination Rack</span></div>
+        <div className="card mt-4">
           <div className="card-body">
-            <div className="grid gap-col-6" style={{ gridTemplateColumns: '340px 1fr', alignItems: 'end' }}>
-              <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">To Rack (emptiest first)</label>
-                <RackCombobox key={source.id} candidates={destCandidates} value={toRackId} onChange={setToRackId} />
+            <div className="flex items-center gap-4 p-4" style={{ background: 'var(--bg)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ textAlign: 'center', flex: 1 }}>
+                <div className="text-xs text-muted">From</div>
+                <div className="font-700 text-primary-color" style={{ fontSize: 16 }}>{source.rack_id}</div>
+                <div className="text-xs text-muted mt-1">
+                  {source.qty} in there now · {Math.max(0, source.qty - moving)} left after
+                </div>
               </div>
 
-              {destRack && (
-                <div className="flex items-center gap-4 p-4" style={{ background: 'var(--bg)', borderRadius: 'var(--radius-md)' }}>
-                  <div style={{ textAlign: 'center', flex: 1 }}>
-                    <div className="text-xs text-muted">From</div>
-                    <div className="font-700 text-primary-color">{source.rack_id}</div>
-                  </div>
-                  <div style={{ color: 'var(--primary)', fontSize: 22 }}><i className="fa-solid fa-arrow-right-long" /></div>
-                  <div style={{ textAlign: 'center', flex: 1 }}>
-                    <div className="text-xs text-muted">To (after)</div>
-                    <div className="font-700 text-primary-color">{destRack.rack_id}</div>
-                    <div className="progress mt-1"><div className={`progress-bar ${pctColorClass(pct(destRack.used + Number(qty || 0), destRack.capacity))}`} style={{ width: `${pct(destRack.used + Number(qty || 0), destRack.capacity)}%` }} /></div>
-                  </div>
-                </div>
-              )}
+              <div style={{ color: 'var(--primary)', fontSize: 22 }}><i className="fa-solid fa-arrow-right-long" /></div>
+
+              <div style={{ textAlign: 'center', flex: 1 }}>
+                <div className="text-xs text-muted">To</div>
+                {destRack ? (
+                  <>
+                    <div className="font-700 text-primary-color" style={{ fontSize: 16 }}>{destRack.rack_id}</div>
+                    <div className="progress mt-1">
+                      <div
+                        className={`progress-bar ${pctColorClass(pct(destRack.used + moving, destRack.capacity))}`}
+                        style={{ width: `${pct(destRack.used + moving, destRack.capacity)}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-muted mt-1">
+                      {destRack.used} in there now · {destRack.used + moving} after
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-muted" style={{ fontSize: 16, fontWeight: 700 }}>Not chosen yet</div>
+                )}
+              </div>
             </div>
-            <button className="btn btn-primary mt-4" onClick={doMove} disabled={!toRackId}>
-              <i className="fa-solid fa-check" /> Move {qty} × {variant.item} → {destRack?.rack_id || 'rack'}
-            </button>
+
+            {/* Which item is making the trip. The racks either side say where;
+                without this the picture never says what. */}
+            <p className="text-sm text-muted mt-3" style={{ textAlign: 'center' }}>
+              Moving <strong>{moving}</strong> × <strong>{variant.item}</strong>
+              {variant.color ? ` · ${variant.color}` : ''}
+              {variant.size ? ` · ${variant.size}` : ''}
+              {destRack ? '' : ' — pick a rack above to move it to.'}
+            </p>
           </div>
         </div>
       )}
@@ -183,7 +227,6 @@ export default function MoveItem() {
   );
 }
 
-// Searchable destination picker: focus (empty) shows the emptiest racks; typing
 // The module documents a variant's stock arrived on. Two are enough to
 // recognise it; the rest collapse into a count so the cell stays one line.
 function ModuleCodes({ codes }) {
@@ -198,7 +241,8 @@ function ModuleCodes({ codes }) {
   );
 }
 
-// filters by rack id live. Same UX as AddItem's TxnCombobox, client-side.
+// Searchable destination picker: focusing it while empty shows the emptiest
+// racks, and typing filters by rack id live. Client-side, same as AddItem's.
 function RackCombobox({ candidates, value, onChange }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
