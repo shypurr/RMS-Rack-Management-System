@@ -771,3 +771,15 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
    long table still reads as a table. */
 .putaway-table tr.row-saved td { background: color-mix(in srgb, var(--success) 8%, transparent); }
 .putaway-table tr.row-error td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+
+/* ── History: expandable picklist rows ─────────────────────────────────────
+   A history row opens to show the lines it was generated with, so checking
+   what was on a picklist does not mean opening its PDF in another tab. */
+.data-table tr.row-open td { background: var(--primary-alpha); }
+.data-table tr.row-detail > td { background: var(--bg); padding: 12px 16px; }
+.nested-table { width: 100%; border-collapse: collapse; }
+.nested-table th {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-muted); text-align: left; padding: 4px 8px;
+}
+.nested-table td { padding: 5px 8px; border-top: 1px solid var(--border); font-size: 13px; }

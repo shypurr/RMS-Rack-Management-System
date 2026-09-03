@@ -282,9 +282,7 @@ export default function Picklist() {
                       onChange={(v) => { setDcNo(v); clearPicklist(); }} />
                   </div>
                   <p className="text-xs text-muted">
-                    Optional. Without a challan no. this picklist is listed in History as
-                    <span className="font-600"> #id</span> and is findable by its item names or
-                    date — filling the challan no. in just gives you the number you already know it by.
+                    Optional — it just makes this picklist easier to find later.
                   </p>
                 </>
               )}

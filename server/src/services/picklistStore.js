@@ -70,33 +70,97 @@ export async function markRackUpdated(orgId, id, pickedQty) {
   );
 }
 
-export async function listPicklists(orgId, limit = 100) {
-  if (!orgId) throw new Error('listPicklists requires an orgId');
+// ── history search ────────────────────────────────────────────────────────
+// Filtering lives here, not in the browser. The client used to fetch the latest
+// 200 picklists and filter them in JS, which meant the 201st was unreachable
+// whatever you typed — and it looked like "no results" rather than "not
+// loaded", which is the worst way for a limit to announce itself.
+
+const like = (q) => `%${q}%`;
+
+// Shared by the count and the page so the two can never disagree about which
+// rows the filter selects. Exported so historySearch.check.mjs can assert the
+// placeholder count matches the bound parameters — a mismatch there is a 500
+// that no amount of reading catches.
+export function picklistWhere(orgId, { q, from, to, status }) {
+  const where = ['p.fk_org_id = ?'];
+  const params = [orgId];
+
+  if (from) { where.push('p.created_at >= ?'); params.push(`${from} 00:00:00`); }
+  // Exclusive bound a day on, so "to = today" means all of today rather than
+  // the single instant of midnight. Comparing created_at directly (instead of
+  // DATE(created_at) = ?) is what keeps idx_picklist_org usable.
+  if (to) { where.push('p.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(`${to} 00:00:00`); }
+
+  if (status === 'updated') where.push('p.rack_updated = 1');
+  if (status === 'pending') where.push('p.rack_updated = 0');
+
+  const term = String(q || '').trim();
+  if (term) {
+    // "#41" and "41" both mean the id the table shows in place of a missing
+    // challan number, so the leading hash is optional when searching.
+    const idTerm = term.replace(/^#/, '');
+    where.push(`(
+      p.dc_no LIKE ? OR p.user_id LIKE ? OR CAST(p.id AS CHAR) LIKE ?
+      OR EXISTS (
+        SELECT 1 FROM picklist_line l2
+        WHERE l2.fk_picklist_id = p.id
+          AND (l2.item LIKE ? OR l2.color LIKE ? OR l2.size LIKE ?)
+      )
+    )`);
+    params.push(like(term), like(term), like(idTerm), like(term), like(term), like(term));
+  }
+
+  return { clause: `WHERE ${where.join(' AND ')}`, params };
+}
+
+// One page of picklist history plus the total the filter matches, so the client
+// can say "showing 50 of 318" instead of leaving the user to wonder whether
+// there is more.
+export async function searchPicklists(orgId, { q, from, to, status, limit = 50, offset = 0 } = {}) {
+  if (!orgId) throw new Error('searchPicklists requires an orgId');
+  const { clause, params } = picklistWhere(orgId, { q, from, to, status });
+
+  const [[{ total }]] = await pool.query(
+    `SELECT COUNT(*) AS total FROM picklist p ${clause}`,
+    params
+  );
+
   const [rows] = await pool.query(
     `SELECT p.id, p.dc_no, p.party, p.source, p.total_qty, p.short_qty,
             p.rack_updated, p.picked_qty, p.picked_at, p.user_id, p.created_at,
             COUNT(l.id) AS line_count,
-            GROUP_CONCAT(DISTINCT l.item ORDER BY l.item SEPARATOR '\\n') AS item_names
+            GROUP_CONCAT(DISTINCT l.item ORDER BY l.item SEPARATOR '\n') AS item_names
      FROM picklist p
      LEFT JOIN picklist_line l ON l.fk_picklist_id = p.id
-     WHERE p.fk_org_id = ?
+     ${clause}
      GROUP BY p.id
      ORDER BY p.created_at DESC, p.id DESC
-     LIMIT ?`,
-    [orgId, limit]
+     LIMIT ? OFFSET ?`,
+    [...params, Number(limit), Number(offset)]
   );
-  // Aliased line_count, not `lines`: LINES is reserved in MySQL 8.
-  //
-  // `items` is what makes a picklist findable when no challan number was
-  // typed in — without it the only handle on the row is its timestamp, since
-  // dc_no is null and the item names live one table down in picklist_line.
-  // Newline-separated because an item name may legitimately contain a comma.
-  return rows.map(({ line_count, item_names, ...r }) => ({
-    ...r,
-    rack_updated: !!r.rack_updated,
-    lines: Number(line_count),
-    items: item_names ? item_names.split('\n') : [],
-  }));
+
+  return {
+    total: Number(total),
+    // Aliased line_count, not `lines`: LINES is reserved in MySQL 8.
+    //
+    // `items` is what makes a picklist findable when no challan number was
+    // typed in — without it the only handle on the row is its timestamp, since
+    // dc_no is null and the item names live one table down in picklist_line.
+    // Newline-separated because an item name may legitimately contain a comma.
+    rows: rows.map(({ line_count, item_names, ...r }) => ({
+      ...r,
+      rack_updated: !!r.rack_updated,
+      lines: Number(line_count),
+      items: item_names ? item_names.split('\n') : [],
+    })),
+  };
+}
+
+// Kept for checkTenancy.js, which asserts one org cannot see another's
+// picklists and only wants the rows.
+export async function listPicklists(orgId, limit = 100) {
+  return (await searchPicklists(orgId, { limit })).rows;
 }
 
 export async function getPicklist(orgId, id) {

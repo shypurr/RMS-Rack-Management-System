@@ -26,6 +26,19 @@ async function request(path, options = {}) {
   return data;
 }
 
+// Only the filters that are actually set are sent, so an empty box never
+// narrows anything server-side.
+function historyQuery({ q, from, to, status, limit, offset } = {}) {
+  const p = new URLSearchParams();
+  if (q) p.set('q', q);
+  if (from) p.set('from', from);
+  if (to) p.set('to', to);
+  if (status) p.set('status', status);
+  if (limit) p.set('limit', String(limit));
+  if (offset) p.set('offset', String(offset));
+  return p.toString();
+}
+
 export const api = {
   sendOtp: (country_code, mobile, is_resend = 0) =>
     request('/auth/send-otp', { method: 'POST', body: { country_code, mobile, is_resend } }),
@@ -85,8 +98,13 @@ export const api = {
   // Re-resolve a stored picklist against current stock (History → Update).
   reresolvePicklist: (id) => request(`/picklist/${id}/resolve`),
 
-  historyPutaway: (limit = 100) => request(`/history/putaway?limit=${limit}`),
-  historyPicklists: (limit = 100) => request(`/history/picklists?limit=${limit}`),
+  // History searches, filters by date and paginates on the SERVER — the old
+  // "fetch 200 and filter in the browser" made everything older than the last
+  // 200 records unreachable. Both return { total, rows }.
+  historyPutaway: (params = {}) => request(`/history/putaway?${historyQuery(params)}`),
+  historyPicklists: (params = {}) => request(`/history/picklists?${historyQuery(params)}`),
+  // One stored picklist's lines, as recorded — powers expanding a history row.
+  historyPicklist: (id) => request(`/history/picklists/${id}`),
 
   // The PDF endpoint needs the Authorization header, which a plain
   // window.open() cannot send — so fetch it, then open the result as a blob.
