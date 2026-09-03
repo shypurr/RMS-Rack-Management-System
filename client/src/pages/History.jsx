@@ -181,9 +181,9 @@ export default function History() {
             {tab === 'picklist' && (
               <select className="form-control" style={{ width: 'auto' }}
                 value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="">Any rack status</option>
-                <option value="pending">Racks not updated</option>
-                <option value="updated">Racks updated</option>
+                <option value="">Taken out or not</option>
+                <option value="pending">Not taken out yet</option>
+                <option value="updated">Already taken out</option>
               </select>
             )}
 
@@ -251,8 +251,8 @@ export default function History() {
                 <thead>
                   <tr>
                     <th style={{ width: 30 }} />
-                    <th>When</th><th>Challan No</th><th>Items</th><th>Lines</th>
-                    <th>Qty</th><th>Rack updated</th><th>By</th><th />
+                    <th>When</th><th>Challan No</th><th>What was picked</th><th>Different items</th>
+                    <th>Total quantity</th><th>Racks updated</th><th>By</th><th />
                   </tr>
                 </thead>
                 <tbody>
@@ -337,14 +337,14 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
         <td>{row.lines}</td>
         <td>
           {row.total_qty}
-          {row.short_qty > 0 && <>&nbsp; <span className="badge badge-danger">short {row.short_qty}</span></>}
+          {row.short_qty > 0 && <>&nbsp; <span className="badge badge-danger">{row.short_qty} not in stock</span></>}
         </td>
         <td>
           {/* The point of this column: a picklist generated and never acted on
               is where a stock discrepancy hides. */}
           {row.rack_updated
-            ? <span className="badge badge-success">true · {row.picked_qty} picked</span>
-            : <span className="badge badge-warning">false</span>}
+            ? <span className="badge badge-success">Yes · {row.picked_qty} taken</span>
+            : <span className="badge badge-warning">Not yet</span>}
         </td>
         <td className="text-xs text-muted">{row.user_id}</td>
         <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -370,7 +370,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
               <>
                 <table className="data-table nested-table">
                   <thead>
-                    <tr><th>Item</th><th>Color</th><th>Size</th><th>Qty</th><th>Racks it came from</th></tr>
+                    <tr><th>Item</th><th>Color</th><th>Size</th><th>Quantity</th><th>Racks it came from</th></tr>
                   </thead>
                   <tbody>
                     {detail.lines.map((l, i) => (
@@ -380,7 +380,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
                         <td>{l.size || '—'}</td>
                         <td>
                           {l.qty}
-                          {l.shortage > 0 && <>&nbsp; <span className="badge badge-danger">short {l.shortage}</span></>}
+                          {l.shortage > 0 && <>&nbsp; <span className="badge badge-danger">{l.shortage} not in stock</span></>}
                         </td>
                         <td className="text-xs">
                           {l.racks || <span className="text-muted">not in any rack at the time</span>}
@@ -390,7 +390,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
                   </tbody>
                 </table>
                 <p className="text-xs text-muted mt-2">
-                  These are the lines as recorded when the picklist was generated
+                  These are the items as recorded when the picklist was made
                   {detail.rack_updated && detail.picked_at ? `, picked ${fmt(detail.picked_at)}` : ''}.
                   {' '}Stock may have moved racks since.
                 </p>
@@ -442,7 +442,7 @@ function UpdateRackModal({ row, onClose, onDone }) {
       const res = await api.pickItems(detail.dcNo, picks, detail.id);
       toast(`${res.pickedQty} units picked across ${res.racks.length} rack(s)`, 'success');
       const short = detail.rows.filter((r) => r.shortage > 0);
-      if (short.length) toast(`${short.length} line(s) short: ${short.map((r) => r.item).join(', ')}`, 'warning');
+      if (short.length) toast(`Not enough stock for ${short.length} item(s): ${short.map((r) => r.item).join(', ')}`, 'warning');
       onDone();
     } catch (e) {
       toast(e.message, 'error');
@@ -488,7 +488,7 @@ function UpdateRackModal({ row, onClose, onDone }) {
                         <td>{r.size || '—'}</td>
                         <td>
                           {r.qty}
-                          {r.shortage > 0 && <>&nbsp; <span className="badge badge-danger">short by {r.shortage}</span></>}
+                          {r.shortage > 0 && <>&nbsp; <span className="badge badge-danger">{r.shortage} not in stock</span></>}
                         </td>
                         <td>
                           {!r.placements.length && <span className="text-muted">Not in any rack</span>}
@@ -518,12 +518,12 @@ function UpdateRackModal({ row, onClose, onDone }) {
 
         <div className="modal-footer">
           <span className="text-sm text-muted" style={{ marginRight: 'auto' }}>
-            {over ? 'A quantity exceeds what that rack holds.' : `${total} unit${total === 1 ? '' : 's'} will be deducted.`}
+            {over ? 'One of the quantities is more than that rack actually holds.' : `${total} item${total === 1 ? '' : 's'} will be taken out of the racks.`}
           </span>
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={confirm} disabled={!detail || saving || !total || over}>
             <i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-check'}`} />
-            &nbsp; {saving ? 'Updating…' : 'Confirm — update racks'}
+            &nbsp; {saving ? 'Taking out…' : 'Confirm — take out of racks'}
           </button>
         </div>
       </div>

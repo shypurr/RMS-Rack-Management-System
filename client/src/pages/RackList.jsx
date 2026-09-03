@@ -118,17 +118,11 @@ export default function RackList() {
 
   const openRack = racks.find((r) => r.rack_no === openRackNo) || null;
 
-  // Editing a quantity has to refresh both lists — the bin's `used` and the
-  // stock row itself both moved.
-  const setQty = async (id, qty) => {
-    try {
-      await api.updateItemQty(id, qty);
-      toast(qty === 0 ? 'Item removed' : 'Quantity updated', 'success');
-      await load();
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  };
+  // Nothing on this screen changes stock. Quantities are set by Putaway, taken
+  // by the Picklist and relocated by Move Item — each of those is a real
+  // warehouse event with an audit trail behind it. Typing a new number into a
+  // box is not, and a screen that allows it is a screen where stock silently
+  // stops matching the shelf.
 
   if (openRack) {
     return (
@@ -136,7 +130,6 @@ export default function RackList() {
         rack={openRack}
         itemsByBin={itemsByBin}
         onBack={() => setOpenRackNo(null)}
-        onSetQty={setQty}
       />
     );
   }
@@ -217,7 +210,7 @@ export default function RackList() {
 // One rack, opened: its shelves in order, each shelf's bins beside it, and the
 // stock in every bin. Full width because a rack is as wide as its shelves are —
 // a 13-bin shelf has nowhere to go in a dialog.
-function RackDetail({ rack, itemsByBin, onBack, onSetQty }) {
+function RackDetail({ rack, itemsByBin, onBack }) {
   const p = pct(rack.used, rack.capacity);
 
   const shelves = useMemo(() => {
@@ -276,7 +269,7 @@ function RackDetail({ rack, itemsByBin, onBack, onSetQty }) {
           <div className="card-body">
             <div className="bin-row">
               {s.bins.map((b) => (
-                <BinCard key={b.id} bin={b} items={itemsByBin.get(b.id) || []} onSetQty={onSetQty} />
+                <BinCard key={b.id} bin={b} items={itemsByBin.get(b.id) || []} />
               ))}
             </div>
           </div>
@@ -284,7 +277,8 @@ function RackDetail({ rack, itemsByBin, onBack, onSetQty }) {
       ))}
 
       <p className="text-xs text-muted">
-        Edit a quantity and press Enter to save. Set it to 0, or use the trash icon, to remove the item.
+        This is a read-only view of what is on the shelf. Stock arrives through Putaway,
+        leaves through the Picklist, and changes rack through Move Item.
       </p>
     </>
   );
@@ -293,7 +287,7 @@ function RackDetail({ rack, itemsByBin, onBack, onSetQty }) {
 // One bin and what is in it. An empty bin still gets a card — the point of this
 // screen is seeing where the space is, and a gap in the grid says that better
 // than a missing tile would.
-function BinCard({ bin, items, onSetQty }) {
+function BinCard({ bin, items }) {
   const p = pct(bin.used, bin.capacity);
   return (
     <div className={`bin-card ${occupancyBucket(bin.used, bin.capacity)}`}>
@@ -320,14 +314,8 @@ function BinCard({ bin, items, onSetQty }) {
                       : MANUAL}
                   </div>
                 </td>
-                <td style={{ width: 64 }}>
-                  <input type="number" min="0" defaultValue={it.qty} className="form-control bin-qty"
-                    onKeyDown={(e) => { if (e.key === 'Enter') onSetQty(it.id, Number(e.target.value)); }} />
-                </td>
-                <td style={{ width: 28 }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => onSetQty(it.id, 0)} title="Remove">
-                    <i className="fa-solid fa-trash" />
-                  </button>
+                <td style={{ width: 48, textAlign: 'right' }}>
+                  <span className="font-700 bin-qty-value">{it.qty}</span>
                 </td>
               </tr>
             ))}

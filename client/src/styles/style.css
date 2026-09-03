@@ -790,3 +790,11 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 
 /* Putaway: this rack was suggested because the same product is already in it. */
 .consolidated-hint { color: var(--success); }
+
+/* Putaway rack picker: two lines per option — the rack and its space on top,
+   what is in it (and what is on its way in) underneath. */
+.rack-option { display: block; line-height: 1.4; }
+.pending-hint { color: var(--warning); }
+
+/* Rack Management is read-only: the quantity is a fact, not a field. */
+.bin-qty-value { font-size: 14px; }

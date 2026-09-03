@@ -69,7 +69,8 @@ export const api = {
   addItem: (payload) => request('/item-locations', { method: 'POST', body: payload }),
   findPlacements: (item, color = '', size = '') =>
     request(`/item-locations/placements?item=${encodeURIComponent(item)}&color=${encodeURIComponent(color)}&size=${encodeURIComponent(size)}`),
-  updateItemQty: (id, qty) => request(`/item-locations/${id}`, { method: 'PATCH', body: { qty } }),
+  // updateItemQty removed with its endpoint — stored quantities are not
+  // hand-editable. See the note in server/src/routes/itemLocations.js.
   move: (itemId, toRackId, qty) => request('/moves', { method: 'POST', body: { itemId, toRackId, qty } }),
 
   sourceTransactions: (moduleType, q = '', limit = 10) => {

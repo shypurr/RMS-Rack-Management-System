@@ -77,6 +77,55 @@ export default function AddItem() {
   const rackCandidates = useMemo(() => sortByEmptiness(racks), [racks]);
   const placements = useMemo(() => indexPlacements(stock), [stock]);
 
+  // What every rack already holds, for the picker's preview line.
+  const stockByRack = useMemo(() => {
+    const m = new Map();
+    for (const it of stock) {
+      const list = m.get(it.fk_rack_id) || [];
+      list.push(it);
+      m.set(it.fk_rack_id, list);
+    }
+    return m;
+  }, [stock]);
+
+  // What THIS table has already promised each rack, before anything is saved.
+  // Without it the picker reads raw database availability and tells row 2 that
+  // a bin row 1 just filled is still empty — true of the database, and useless
+  // to the person deciding where the next box goes.
+  const pendingByRack = useMemo(() => {
+    const m = new Map();
+    for (const row of rows) {
+      if (row.saved) continue;
+      for (const a of row.allocs) {
+        if (a.rackId) m.set(a.rackId, (m.get(a.rackId) || 0) + num(a.qty));
+      }
+    }
+    return m;
+  }, [rows]);
+
+  // Room left in a rack right now: what the database says, less everything this
+  // table has claimed, plus back whatever the box being edited already holds —
+  // that space is not lost, it is the space this box is using.
+  const freeIn = (rackId, ownQty = 0) => {
+    const rack = rackById.get(rackId);
+    if (!rack) return 0;
+    return Math.max(0, num(rack.available) - (pendingByRack.get(rackId) || 0) + num(ownQty));
+  };
+
+  // Choosing a rack fills the quantity in as well. Picking a bin and leaving
+  // "0" beside it is not a thing anyone means to do — the box is chosen in
+  // order to put something in it — and the old behaviour left the line reading
+  // "0 of 10 placed" as if nothing had happened.
+  const chooseRack = (row, alloc, rackId) => {
+    if (!rackId) return patchAlloc(row.key, alloc.key, { rackId: null, consolidated: false });
+    const room = freeIn(rackId, alloc.qty);
+    const want = Math.max(0, num(row.qty) - allocatedOn(row) + num(alloc.qty));
+    const qty = Math.min(room, want);
+    patchAlloc(row.key, alloc.key, {
+      rackId, consolidated: false, qty: qty > 0 ? String(qty) : '',
+    });
+  };
+
   // Fills in every line that still needs racks. A starting point, not a
   // decision — every box it touches stays editable, and anything already chosen
   // by hand is left exactly as it is.
@@ -84,7 +133,7 @@ export default function AddItem() {
     const next = suggestRacks(rows, racks, placements);
     setRows(next);
     const short = next.filter((r) => r.item.trim() && num(r.qty) > 0 && remainingOn(r) > 0).length;
-    if (short) toast(`${short} line(s) could not be fully placed — not enough free space`, 'warning');
+    if (short) toast(`${short} item(s) did not fit — your racks are short on space`, 'warning');
   };
 
   // ── row plumbing ────────────────────────────────────────────────────────
@@ -139,7 +188,7 @@ export default function AddItem() {
       // fitted in the dropdown's page.
       const all = await api.sourceTransactions(moduleType, id, 100);
       const lines = all.filter((t) => docNo(t.id) === id).sort((a, b) => lineNo(a.id) - lineNo(b.id));
-      if (!lines.length) throw new Error(`No lines found on ${id}`);
+      if (!lines.length) throw new Error(`No items found on ${id}`);
       setRows(lines.map((t) => newRow({
         item: t.item ?? '', color: t.color ?? '', size: t.size ?? '',
         qty: String(t.qty ?? ''),
@@ -148,7 +197,7 @@ export default function AddItem() {
         docQty: t.qty ?? null,
         moduleType: t.module_type ?? moduleType, moduleId: id,
       })));
-      toast(`${id} — ${lines.length} item${lines.length > 1 ? 's' : ''} loaded`, 'success');
+      toast(`${id} — ${lines.length} item${lines.length > 1 ? 's' : ''} found`, 'success');
     } catch (e) {
       toast(e.message, 'error');
       setRows([newRow()]);
@@ -176,7 +225,7 @@ export default function AddItem() {
   const needsRacks = ready.filter((r) => remainingOn(r) > 0).length;
 
   const saveAll = async () => {
-    if (!placeable.length) return toast('Nothing to put away — fill in an item, a quantity and a rack', 'warning');
+    if (!placeable.length) return toast('Nothing to add yet — each item needs a quantity and a rack', 'warning');
     setSaving(true);
     let placed = 0, failed = 0;
     for (const row of placeable) {
@@ -200,8 +249,8 @@ export default function AddItem() {
     await loadRacks();
     setSaving(false);
 
-    if (placed) toast(`${placed} unit${placed === 1 ? '' : 's'} put away`, 'success');
-    if (failed) toast(`${failed} line${failed > 1 ? 's' : ''} could not be placed — see the table`, 'error');
+    if (placed) toast(`${placed} item${placed === 1 ? '' : 's'} added to your racks`, 'success');
+    if (failed) toast(`${failed} item(s) could not be added — see the red rows`, 'error');
   };
 
   // Once everything has landed, start clean rather than leaving a table of
@@ -218,7 +267,7 @@ export default function AddItem() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Putaway</h1>
-          <p className="page-subtitle">Put a whole inward away at once — every line on it, into the racks you choose</p>
+          <p className="page-subtitle">Add a whole delivery to your racks in one go</p>
         </div>
       </div>
 
@@ -226,7 +275,7 @@ export default function AddItem() {
         <div>
           {/* Step 1 — source (overflow:visible so the txn dropdown isn't clipped) */}
           <div className="card mb-4" style={{ overflow: 'visible' }}>
-            <div className="card-header"><span className="card-title"><i className="fa-solid fa-file-import text-primary-color" />&nbsp; Step 1 — Item Source</span></div>
+            <div className="card-header"><span className="card-title"><i className="fa-solid fa-file-import text-primary-color" />&nbsp; Step 1 — Where it came from</span></div>
             <div className="card-body">
               <div className="tab-bar">
                 <div className={`tab-btn ${mode === 'source' ? 'active' : ''}`} onClick={() => switchMode('source')}>From Source Module</div>
@@ -250,13 +299,13 @@ export default function AddItem() {
                     </div>
                   </div>
                   <p className="text-xs text-muted" style={{ marginTop: -8 }}>
-                    Pick the document once — every line on it fills in below.
+                    Choose the transaction once and all its items appear below.
                   </p>
                 </>
               )}
               {mode === 'manual' && (
                 <p className="text-muted text-sm">
-                  Enter the items below. Use <strong>Add item</strong> for as many as you need.
+                  Type the items in below. Press <strong>Add item</strong> for each extra one.
                 </p>
               )}
             </div>
@@ -266,7 +315,7 @@ export default function AddItem() {
           <div className="card mb-4" style={{ overflow: 'visible' }}>
             <div className="card-header">
               <span className="card-title">
-                <i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — Items{docId ? ` on ${docId}` : ''}
+                <i className="fa-solid fa-list text-primary-color" />&nbsp; Step 2 — What arrived{docId ? ` on ${docId}` : ''}
               </span>
               {loadingDoc && <span className="text-sm text-muted ml-auto"><i className="fa-solid fa-spinner fa-spin" /> Loading…</span>}
             </div>
@@ -290,6 +339,8 @@ export default function AddItem() {
                         key={row.key}
                         row={row} index={i} locked={!!row.moduleId}
                         racks={rackCandidates} rackById={rackById}
+                        stockByRack={stockByRack} freeIn={freeIn}
+                        onChooseRack={(alloc, id) => chooseRack(row, alloc, id)}
                         onPatch={(patch) => patchRow(row.key, patch)}
                         onSetQty={(v) => setRowQty(row.key, v)}
                         onPatchAlloc={(ak, patch) => patchAlloc(row.key, ak, patch)}
@@ -311,14 +362,14 @@ export default function AddItem() {
                 </button>
                 {needsRacks > 0 && (
                   <button className="btn btn-outline btn-sm" onClick={suggest}
-                    title="Fill in racks for every line that still needs them">
+                    title="Choose racks automatically for the items that still need one">
                     <i className="fa-solid fa-wand-magic-sparkles" />
-                    &nbsp; Suggest racks for {needsRacks} line{needsRacks > 1 ? 's' : ''}
+                    &nbsp; Choose racks for me ({needsRacks} left)
                   </button>
                 )}
                 {anyUnderAllocated && (
                   <span className="text-xs text-muted">
-                    A line is not put away until its whole quantity has a rack.
+                    Every item needs a rack for its full quantity before you can add it.
                   </span>
                 )}
               </div>
@@ -328,12 +379,12 @@ export default function AddItem() {
           <div className="flex gap-3 items-center">
             {allSaved && rows.some((r) => r.saved) ? (
               <button className="btn btn-primary" onClick={startOver}>
-                <i className="fa-solid fa-rotate-right" />&nbsp; Put away another
+                <i className="fa-solid fa-rotate-right" />&nbsp; Add another delivery
               </button>
             ) : (
               <button className="btn btn-primary" onClick={saveAll} disabled={saving || !placeable.length}>
                 <i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-boxes-packing'}`} />
-                &nbsp; {saving ? 'Putting away…' : `Put away ${placeable.length || ''} line${placeable.length === 1 ? '' : 's'}`.trim()}
+                &nbsp; {saving ? 'Adding…' : 'Add to racks'}
               </button>
             )}
           </div>
@@ -348,12 +399,12 @@ export default function AddItem() {
               <SummaryRow label="Document" value={docId || '—'} />
               <SummaryRow label="Module" value={mode === 'source' ? moduleType : '—'} />
               <hr className="divider" />
-              <SummaryRow label="Lines" value={rows.filter((r) => r.item.trim()).length || '—'} />
-              <SummaryRow label="Total qty" value={totalQty || '—'} />
-              <SummaryRow label="Allocated" value={totalAllocated || '—'} />
-              <SummaryRow label="Unallocated" value={Math.max(0, totalQty - totalAllocated) || '—'} />
+              <SummaryRow label="Items" value={rows.filter((r) => r.item.trim()).length || '—'} />
+              <SummaryRow label="Total quantity" value={totalQty || '—'} />
+              <SummaryRow label="Given a rack" value={totalAllocated || '—'} />
+              <SummaryRow label="Still to place" value={Math.max(0, totalQty - totalAllocated) || '—'} />
               <hr className="divider" />
-              <SummaryRow label="Put away" value={rows.filter((r) => r.saved).length || '—'} />
+              <SummaryRow label="Added to racks" value={rows.filter((r) => r.saved).length || '—'} />
             </div>
           </div>
         </div>
@@ -364,7 +415,7 @@ export default function AddItem() {
 
 // One line of the inward: what it is, how many, and which racks it goes into.
 function Row({
-  row, index, locked, racks, rackById,
+  row, index, locked, racks, rackById, stockByRack, freeIn, onChooseRack,
   onPatch, onSetQty, onSetAllocQty, onPatchAlloc, ceilingFor,
   onAddAlloc, onRemoveAlloc, onRemove, canRemove,
 }) {
@@ -403,16 +454,20 @@ function Row({
       <td>
         {row.allocs.map((a) => {
           const rack = a.rackId ? rackById.get(a.rackId) : null;
-          // Soft warning only: another line in this same table may be filling
-          // the rack too, so the authoritative check is the server's.
-          const tooBig = rack && num(a.qty) > rack.available;
+          // Measured against room left AFTER everything else in this table, so
+          // two rows filling the same bin is caught here rather than by the
+          // server halfway through saving.
+          const tooBig = rack && num(a.qty) > freeIn(a.rackId, a.qty);
           return (
             <div key={a.key} className="putaway-alloc">
               <div style={{ flex: 1, minWidth: 150 }}>
                 <RackCombobox
                   candidates={racks}
                   value={a.rackId}
-                  onChange={(id) => onPatchAlloc(a.key, { rackId: id || null, consolidated: false })}
+                  ownQty={a.qty}
+                  freeIn={freeIn}
+                  stockByRack={stockByRack}
+                  onChange={(id) => onChooseRack(a, id)}
                 />
               </div>
               <input className="form-control alloc-qty" type="number" min="0" placeholder="0"
@@ -425,7 +480,7 @@ function Row({
               )}
               {tooBig && (
                 <span className="text-xs text-danger" style={{ whiteSpace: 'nowrap' }}>
-                  only {rack.available} free
+                  only {freeIn(a.rackId, a.qty)} space left here
                 </span>
               )}
               {/* Why the suggester chose this one — the same product is already
@@ -441,17 +496,19 @@ function Row({
 
         {canAddRack && (
           <button className="btn btn-ghost btn-sm" onClick={onAddAlloc}>
-            <i className="fa-solid fa-plus" />&nbsp; another rack
+            <i className="fa-solid fa-plus" />&nbsp; use another rack
           </button>
         )}
 
         {qty > 0 && (
           <div className={`text-xs mt-1 ${remaining === 0 ? 'text-muted' : 'text-danger'}`}>
-            {allocated} of {qty} placed{remaining > 0 ? ` · ${remaining} still needs a rack` : ' ✓'}
+            {remaining > 0
+              ? `${allocated} of ${qty} given a rack · ${remaining} still to go`
+              : `All ${qty} have a rack ✓`}
           </div>
         )}
         {row.error && <div className="text-xs text-danger mt-1">{row.error}</div>}
-        {row.saved && <div className="text-xs mt-1" style={{ color: 'var(--success)' }}>Put away</div>}
+        {row.saved && <div className="text-xs mt-1" style={{ color: 'var(--success)' }}>Added to rack</div>}
       </td>
       <td>
         {canRemove && !row.saved && (
@@ -532,8 +589,10 @@ function DocCombobox({ moduleType, onSelect, onClear }) {
   );
 }
 
-// Rack picker, filtering by rack id live. Same UX as MoveItem's.
-function RackCombobox({ candidates, value, onChange }) {
+// Rack picker. Shows what is left in each rack RIGHT NOW — the database figure
+// less everything the rest of this table has already promised it — and what is
+// sitting in it, so choosing where a box goes does not need a second screen.
+function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState(false);
@@ -544,10 +603,26 @@ function RackCombobox({ candidates, value, onChange }) {
   useEffect(() => { if (!value && picked) { setPicked(false); setQuery(''); } }, [value]);
 
   const q = query.trim().toLowerCase();
-  const matches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
+  const pool = picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q));
+  // Racks this table has already filled sink to the bottom rather than
+  // disappearing — a full one is still worth seeing, with its reason.
+  const matches = pool
+    .map((r) => ({ ...r, room: freeIn(r.id, ownQty) }))
+    .sort((a, b) => b.room - a.room)
+    .slice(0, 8);
 
   const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.id); };
   const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
+
+  // What is stored in a rack, in a phrase. Two products named, the rest counted.
+  const holdsText = (id) => {
+    const held = stockByRack.get(id) || [];
+    if (!held.length) return null;
+    const names = [...new Set(held.map((h) => h.item))];
+    const units = held.reduce((t, h) => t + num(h.qty), 0);
+    const shown = names.slice(0, 2).join(', ');
+    return `${units} in here · ${shown}${names.length > 2 ? ` +${names.length - 2} more` : ''}`;
+  };
 
   return (
     <div style={{ position: 'relative' }}>
@@ -561,12 +636,33 @@ function RackCombobox({ candidates, value, onChange }) {
       />
       {open && (
         <div className="txn-dropdown">
-          {matches.length ? matches.map((r) => (
-            <div key={r.id} className="txn-option" onMouseDown={() => choose(r)}>
-              <span className="font-600 text-primary-color">{r.rack_id}</span>
-              <span className="text-sm text-muted">&nbsp; {r.available} free{r.status === 'Vacant' ? ' · empty' : ''}</span>
-            </div>
-          )) : <div className="txn-option text-muted">No racks with space match</div>}
+          {matches.length ? matches.map((r) => {
+            // The gap between what the database says and what is left once this
+            // table is saved. Naming it is the whole point — otherwise a rack a
+            // row above just filled still reads as empty.
+            const waiting = num(r.available) - r.room - num(ownQty);
+            const holds = holdsText(r.id);
+            return (
+              <div key={r.id} className="txn-option rack-option" onMouseDown={() => choose(r)}>
+                <div className="flex items-center gap-2">
+                  <span className="font-600 text-primary-color">{r.rack_id}</span>
+                  <span className={`text-sm ${r.room === 0 ? 'text-danger' : 'text-muted'}`}>
+                    {r.room === 0 ? 'no space left' : `${r.room} space free`}
+                  </span>
+                </div>
+                <div className="text-xs text-muted">
+                  {waiting > 0 && (
+                    <span className="pending-hint">
+                      <i className="fa-solid fa-clock-rotate-left" />&nbsp;
+                      {waiting} going in from this list
+                    </span>
+                  )}
+                  {waiting > 0 && holds && <span> · </span>}
+                  {holds || (waiting > 0 ? null : 'empty')}
+                </div>
+              </div>
+            );
+          }) : <div className="txn-option text-muted">No racks match</div>}
         </div>
       )}
     </div>

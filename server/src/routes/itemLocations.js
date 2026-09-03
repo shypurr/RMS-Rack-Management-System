@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
-import { addItem, updateItemQty, findPlacements } from '../services/rackService.js';
+import { addItem, findPlacements } from '../services/rackService.js';
 import { getOrgWidths } from '../services/layoutService.js';
 import { decorateRacks } from '../lib/rackCode.js';
 
@@ -42,14 +42,18 @@ router.post('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/item-locations/:id — update qty (0 removes). SRS §3.2
-router.patch('/:id', async (req, res, next) => {
-  try {
-    const result = await updateItemQty(req.org.id, {
-      id: Number(req.params.id), qty: req.body.qty, userId: req.org.vastra_org_id,
-    });
-    res.json(result);
-  } catch (err) { next(err); }
-});
+// PATCH /api/item-locations/:id is gone deliberately.
+//
+// It set a stored quantity to any number, and to 0 to delete the row. That is
+// the one thing no screen is allowed to do: stock in a rack changes by Putaway
+// (it arrived), by the Picklist (it left) or by Move Item (it went elsewhere),
+// and each of those records WHY in the audit trail. A bare "set it to 7" records
+// nothing, so a warehouse that drifts from its shelves has no history to explain
+// how. Rack Management used to call this and no longer does.
+//
+// updateItemQty is still in rackService.js: a deliberate stock-correction flow
+// (damage, shrinkage, a miscount found later) is a real need, and when it is
+// built it should be its own endpoint with its own reason field — not this one
+// quietly reopened.
 
 export default router;

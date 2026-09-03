@@ -195,7 +195,7 @@ export default function Picklist() {
     const picks = Object.entries(alloc)
       .map(([id, qty]) => ({ itemLocationId: Number(id), qty: Number(qty) || 0 }))
       .filter((p) => p.qty > 0);
-    if (!picks.length) return toast('Nothing allocated to pick', 'warning');
+    if (!picks.length) return toast('Nothing chosen to pick yet', 'warning');
 
     const short = detail.rows.filter((r) => r.shortage > 0);
     setSaving(true);
@@ -203,7 +203,7 @@ export default function Picklist() {
       const res = await api.pickItems(detail.dcNo, picks, detail.id);
       toast(`${res.pickedQty} units picked${detail.dcNo ? ` for ${detail.dcNo}` : ''} across ${res.racks.length} rack(s)`, 'success');
       if (short.length) {
-        toast(`${short.length} line(s) still short: ${short.map((r) => r.item).join(', ')}`, 'warning');
+        toast(`Not enough stock for ${short.length} item(s): ${short.map((r) => r.item).join(', ')}`, 'warning');
       }
       // The pick is done — clear the whole challan so the next one starts from
       // a blank slate. Leaving the list up invites picking it a second time.
@@ -462,13 +462,13 @@ export default function Picklist() {
                   <hr className="divider" />
                 </>
               )}
-              <SummaryRow label="Items" value={blocks.length || '—'} />
-              <SummaryRow label="Lines" value={detail ? detail.rows.length : lines.length || '—'} />
-              <SummaryRow label="Total qty" value={totals ? totals.qty : lineTotal || '—'} />
-              <SummaryRow label="In racks" value={totals ? totals.available : '—'} />
-              <SummaryRow label="Short" value={totals ? totals.short : '—'} />
+              <SummaryRow label="Items on the challan" value={blocks.length || '—'} />
+              <SummaryRow label="Different items" value={detail ? detail.rows.length : lines.length || '—'} />
+              <SummaryRow label="Total quantity" value={totals ? totals.qty : lineTotal || '—'} />
+              <SummaryRow label="Found in racks" value={totals ? totals.available : '—'} />
+              <SummaryRow label="Not enough stock" value={totals ? totals.short : '—'} />
               <hr className="divider" />
-              <SummaryRow label="Allocated" value={detail ? totalPicked : '—'} />
+              <SummaryRow label="Ready to pick" value={detail ? totalPicked : '—'} />
             </div>
           </div>
         </div>
@@ -479,7 +479,7 @@ export default function Picklist() {
             <div className="card-header">
               <span className="card-title"><i className="fa-solid fa-clipboard-list text-primary-color" />&nbsp; Picklist{detail.dcNo ? ` — ${detail.dcNo}` : ''}</span>
               <span className="flex items-center gap-3">
-                <span className="badge badge-primary">{totalPicked} of {totals.qty} allocated</span>
+                <span className="badge badge-primary">{totalPicked} of {totals.qty} ready to pick</span>
                 <button className="btn btn-outline btn-sm" onClick={openPdf} disabled={printing || !detail.id}>
                   <i className={`fa-solid ${printing ? 'fa-spinner fa-spin' : 'fa-file-pdf'}`} />
                   &nbsp; {printing ? 'Building…' : 'Print PDF'}
@@ -504,7 +504,7 @@ export default function Picklist() {
                           <td>{r.size || '—'}</td>
                           <td>
                             {r.qty}
-                            {r.shortage > 0 && <>&nbsp; <span className="badge badge-danger">short by {r.shortage}</span></>}
+                            {r.shortage > 0 && <>&nbsp; <span className="badge badge-danger">{r.shortage} not in stock</span></>}
                           </td>
                           <td>
                             {!r.placements.length && <span className="text-muted">Not in any rack</span>}
@@ -522,7 +522,7 @@ export default function Picklist() {
                             ))}
                             {r.placements.length > 0 && (
                               <div className={`text-xs mt-1 ${picked === r.qty ? 'text-muted' : 'text-danger'}`}>
-                                picked {picked} / {r.qty}
+                                {picked} of {r.qty} chosen
                               </div>
                             )}
                           </td>
@@ -536,12 +536,12 @@ export default function Picklist() {
               <div className="flex items-center gap-3 mt-4">
                 <button className="btn btn-primary" onClick={updateRack} disabled={saving || !totalPicked || overAllocated}>
                   <i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-boxes-packing'}`} />
-                  &nbsp; {saving ? 'Updating…' : 'Update Rack'}
+                  &nbsp; {saving ? 'Taking out…' : 'Take out of racks'}
                 </button>
                 <span className="text-sm text-muted">
                   {overAllocated
-                    ? 'A quantity exceeds what that rack holds.'
-                    : 'Generating changed nothing — this button deducts the quantities above from the racks.'}
+                    ? 'One of the quantities is more than that rack actually holds.'
+                    : 'Nothing has left the racks yet. This button removes the quantities above.'}
                 </span>
               </div>
             </div>

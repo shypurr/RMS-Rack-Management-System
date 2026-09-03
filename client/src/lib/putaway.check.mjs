@@ -193,3 +193,62 @@ console.log('\nputaway arithmetic checks passed\n');
 }
 
 console.log('\nrack suggestion checks passed\n');
+
+// ── live free space across the table ───────────────────────────────────────
+// The bug this covers: the rack picker read raw database availability, so a bin
+// that row 1 had just claimed still advertised itself to row 2 as empty. True
+// of the database, wrong for the person deciding where the next box goes.
+{
+  const racks = [
+    { id: 1, rack_id: 'R001-S01-B01', available: 30, capacity: 30 },
+    { id: 2, rack_id: 'R001-S01-B02', available: 30, capacity: 30 },
+  ];
+  const rackById = new Map(racks.map((r) => [r.id, r]));
+
+  // Mirrors the page: pending across every unsaved row, own claim added back.
+  const pendingOf = (rows) => {
+    const m = new Map();
+    for (const row of rows) {
+      if (row.saved) continue;
+      for (const a of row.allocs) if (a.rackId) m.set(a.rackId, (m.get(a.rackId) || 0) + Number(a.qty || 0));
+    }
+    return m;
+  };
+  const freeIn = (rows, rackId, ownQty = 0) => Math.max(
+    0,
+    Number(rackById.get(rackId).available) - (pendingOf(rows).get(rackId) || 0) + Number(ownQty || 0)
+  );
+
+  const rows = [
+    { item: 'Black Track', qty: '10', saved: false, allocs: [{ key: 'a', rackId: 1, qty: '10' }] },
+    { item: 'Black Track', qty: '10', saved: false, allocs: [{ key: 'b', rackId: null, qty: '' }] },
+  ];
+
+  // The reported case, exactly.
+  assert.equal(freeIn(rows, 1), 20, 'row 2 must see 20 free, not 30 — row 1 claimed 10');
+  assert.equal(freeIn(rows, 2), 30, 'an untouched rack still shows its full space');
+  ok('a rack claimed by an earlier row no longer advertises that space to later rows');
+
+  // The box holding the claim still sees its own space as available to it,
+  // otherwise editing 10 down to 8 would be impossible.
+  assert.equal(freeIn(rows, 1, '10'), 30, "a box may re-use the space it already holds");
+  ok('editing an existing quantity is not blocked by its own claim');
+
+  // Filling a rack completely leaves nothing for anyone else.
+  const full = [{ item: 'A', qty: '30', saved: false, allocs: [{ key: 'a', rackId: 1, qty: '30' }] }];
+  assert.equal(freeIn(full, 1), 0, 'a fully claimed rack shows no space');
+  ok('a rack filled by this table reports no space left');
+
+  // Already-saved rows are excluded: their stock is in `available` now, so
+  // counting them again would subtract the same units twice.
+  const saved = [{ item: 'A', qty: '10', saved: true, allocs: [{ key: 'a', rackId: 1, qty: '10' }] }];
+  assert.equal(freeIn(saved, 1), 30, 'a saved row must not be double-counted');
+  ok('rows already added are not subtracted twice');
+
+  // Never negative, however over-claimed.
+  const over = [{ item: 'A', qty: '99', saved: false, allocs: [{ key: 'a', rackId: 1, qty: '99' }] }];
+  assert.equal(freeIn(over, 1), 0, 'free space floors at zero');
+  ok('free space never goes negative');
+}
+
+console.log('\nlive rack space checks passed\n');
