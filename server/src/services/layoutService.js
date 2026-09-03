@@ -298,3 +298,224 @@ export async function addRacks(orgId, { racks, shelves, bins, bin_capacity, user
     };
   });
 }
+
+// ── editing one rack ──────────────────────────────────────────────────────
+// Reshaping ONE rack in place: different shelves, different bins per shelf, a
+// different capacity per bin. The rack keeps its number — that number is
+// painted on a real rack in a real warehouse, and renumbering here would
+// rename it there.
+//
+// This is the only function in the codebase that can delete a bin, so its
+// blast radius is fenced deliberately rather than left to the caller:
+//
+//   * it takes one rack number, so no input reaches a second rack;
+//   * it refuses if that rack holds anything — checked inside the transaction
+//     with the bin rows locked, not from what a screen believed a moment ago;
+//   * an empty rack has nothing to lose, so the worst outcome it can produce
+//     is a rack with the wrong shape, undone by editing it again.
+//
+// addRacks stays exactly as it is: it takes no target state and so cannot be
+// made destructive by any input at all. That property is worth keeping on the
+// path that runs thousands of bins at a time.
+export async function editRack(orgId, rackNo, { shelves, bins, bin_capacity, userId = 'system' }) {
+  if (!orgId) throw new HttpError(500, 'editRack requires an orgId');
+  const rack_no = Number(rackNo);
+  if (!Number.isInteger(rack_no) || rack_no <= 0) {
+    throw new HttpError(400, `Invalid rack number "${rackNo}" — expected a whole number`);
+  }
+  // racks: 1 — the shape rules are identical, and a rack is a batch of one.
+  validateBatch({ racks: 1, shelves, bins, bin_capacity });
+  const shape = {
+    shelves: Number(shelves), bins: Number(bins), bin_capacity: Number(bin_capacity),
+  };
+
+  const widths = await getOrgWidths(orgId);
+  const label = `R${String(rack_no).padStart(widths.rack, '0')}`;
+
+  return withTransaction(async (conn) => {
+    await conn.query('SELECT version FROM rack_layout WHERE fk_org_id = ? FOR UPDATE', [orgId]);
+
+    // FOR UPDATE, so a putaway arriving between the emptiness check and the
+    // delete waits for this transaction instead of slipping stock into a bin
+    // that is about to stop existing.
+    const [existing] = await conn.query(
+      `SELECT id, rack_no, shelf_no, bin_no, capacity, used
+       FROM rack_master WHERE fk_org_id = ? AND rack_no = ?
+       ORDER BY shelf_no, bin_no FOR UPDATE`,
+      [orgId, rack_no]
+    );
+    if (!existing.length) throw new HttpError(404, `${label} does not exist`);
+
+    // "Is it empty" is asked of two independent records: the running `used`
+    // counter on each bin, and the item rows themselves. They should always
+    // agree — asking both means that if they ever drift, the edit is refused
+    // rather than quietly deleting whichever one was right.
+    const [[held]] = await conn.query(
+      `SELECT COALESCE(SUM(il.qty), 0) AS units, COUNT(DISTINCT il.fk_rack_id) AS bins
+       FROM item_location il
+       JOIN rack_master rm ON rm.id = il.fk_rack_id
+       WHERE rm.fk_org_id = ? AND rm.rack_no = ?`,
+      [orgId, rack_no]
+    );
+    const units = Math.max(Number(held.units), existing.reduce((t, b) => t + Number(b.used), 0));
+    if (units > 0) {
+      const usedBins = Math.max(
+        Number(held.bins), existing.filter((b) => Number(b.used) > 0).length
+      );
+      // Names what is in the way and what to do about it. "Only empty racks can
+      // be edited" is true, but leaves the user to go and find out why.
+      throw new HttpError(409,
+        `${label} has ${units} item${units === 1 ? '' : 's'} in ${usedBins} ` +
+        `bin${usedBins === 1 ? '' : 's'}. Move them out first, then you can change this rack.`);
+    }
+
+    const target = binsForGroup({ rack_from: rack_no, rack_to: rack_no, ...shape });
+    const { add, keep, remove } = diffLayout(existing, target);
+
+    // The rack is empty, so this must come back clean. It is asked anyway: if
+    // it ever does not, one of the two reads above is wrong, and refusing is
+    // the only safe answer.
+    if (findBlockers({ keep, remove }).length) {
+      throw new HttpError(409, `${label} still holds stock — nothing was changed.`);
+    }
+
+    for (let i = 0; i < remove.length; i += 500) {
+      await conn.query('DELETE FROM rack_master WHERE fk_org_id = ? AND id IN (?)',
+        [orgId, remove.slice(i, i + 500).map((b) => b.id)]);
+    }
+    for (let i = 0; i < add.length; i += 500) {
+      await conn.query(
+        'INSERT INTO rack_master (fk_org_id, rack_no, shelf_no, bin_no, capacity) VALUES ?',
+        [add.slice(i, i + 500).map((b) => [orgId, b.rack_no, b.shelf_no, b.bin_no, b.capacity])]
+      );
+    }
+    // Every surviving bin takes the new capacity, but only the ones actually
+    // changing are written — so a shelves-only edit touches no capacities.
+    const recap = keep.filter((b) => Number(b.capacity) !== shape.bin_capacity);
+    for (let i = 0; i < recap.length; i += 500) {
+      await conn.query('UPDATE rack_master SET capacity = ? WHERE fk_org_id = ? AND id IN (?)',
+        [shape.bin_capacity, orgId, recap.slice(i, i + 500).map((b) => b.id)]);
+    }
+
+    await resplitGroup(conn, orgId, rack_no, shape);
+
+    const [[current]] = await conn.query(
+      'SELECT version FROM rack_layout WHERE fk_org_id = ?', [orgId]
+    );
+    const nextVersion = (current?.version ?? 0) + 1;
+    await conn.query(
+      `INSERT INTO rack_layout (fk_org_id, version) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE version = VALUES(version)`,
+      [orgId, nextVersion]
+    );
+
+    const was = {
+      shelves: new Set(existing.map((b) => b.shelf_no)).size,
+      bins_total: existing.length,
+      bin_capacity: Math.max(...existing.map((b) => Number(b.capacity))),
+    };
+    await writeAudit(conn, {
+      orgId,
+      entityType: 'rack',
+      entityId: `rack:${orgId}:${rack_no}`,
+      action: 'update',
+      before: { rack_no, ...was },
+      after: { rack_no, ...shape, bins_total: target.length },
+      userId,
+    });
+
+    return {
+      rack_no, label, ...shape,
+      binsBefore: existing.length,
+      binsAfter: target.length,
+      binsAdded: add.length,
+      binsRemoved: remove.length,
+      version: nextVersion,
+    };
+  });
+}
+
+// A rack group describes a BATCH, and a batch carries one shape — so reshaping
+// one rack inside a batch of a hundred has to split that batch around it. The
+// racks either side keep the old shape; the edited rack becomes a group of one.
+//
+// Rack Setup therefore shows more rows after an edit. That is correct rather
+// than untidy: those racks really are shaped differently now. It is the same
+// rule as "if even one parameter differs, do not merge them", seen from the
+// other end.
+async function resplitGroup(conn, orgId, rack_no, shape) {
+  const [[group]] = await conn.query(
+    `SELECT id, rack_from, rack_to, shelves, bins, bin_capacity FROM rack_group
+     WHERE fk_org_id = ? AND rack_from <= ? AND rack_to >= ? LIMIT 1`,
+    [orgId, rack_no, rack_no]
+  );
+
+  if (group) await conn.query('DELETE FROM rack_group WHERE id = ? AND fk_org_id = ?', [group.id, orgId]);
+  const pieces = splitGroupAround(group, rack_no, shape);
+
+  for (const p of pieces) {
+    await conn.query(
+      `INSERT INTO rack_group (fk_org_id, seq, rack_from, rack_to, shelves, bins, bin_capacity)
+       VALUES (?, 0, ?, ?, ?, ?, ?)`,
+      [orgId, p.rack_from, p.rack_to, p.shelves, p.bins, p.bin_capacity]
+    );
+  }
+
+  // Then put the list back together. Two jobs at once:
+  //
+  //   fold  — a split that ends up matching its neighbours becomes one batch
+  //           again. Editing R3 back to the shape R2 and R4 already have would
+  //           otherwise leave three rows describing one uniform stretch for
+  //           ever, and every later edit would add more. The screen merges them
+  //           for display either way; the stored list should not drift.
+  //   seq   — a batch's place in the list. Racks are only ever appended, so
+  //           that order has always been rack_from order — which is the one
+  //           ordering a split in the middle can still honour.
+  const [rows] = await conn.query(
+    `SELECT id, rack_from, rack_to, shelves, bins, bin_capacity FROM rack_group
+     WHERE fk_org_id = ? ORDER BY rack_from, id`, [orgId]
+  );
+  const folded = [];
+  for (const r of rows) {
+    const prev = folded.at(-1);
+    const joins = prev
+      && prev.rack_to + 1 === r.rack_from
+      && prev.shelves === r.shelves
+      && prev.bins === r.bins
+      && prev.bin_capacity === r.bin_capacity;
+    if (joins) prev.rack_to = r.rack_to;
+    else folded.push({ ...r });
+  }
+
+  await conn.query('DELETE FROM rack_group WHERE fk_org_id = ?', [orgId]);
+  for (let i = 0; i < folded.length; i++) {
+    const g = folded[i];
+    await conn.query(
+      `INSERT INTO rack_group (fk_org_id, seq, rack_from, rack_to, shelves, bins, bin_capacity)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [orgId, i + 1, g.rack_from, g.rack_to, g.shelves, g.bins, g.bin_capacity]
+    );
+  }
+}
+
+// The arithmetic of that split, without a database in the way — exported so
+// layoutSplit.check.mjs can prove the pieces still cover the original range
+// exactly: no rack dropped, none described twice, none silently reshaped.
+// Getting this wrong would leave Rack Setup describing a warehouse that is not
+// the one on the floor.
+export function splitGroupAround(group, rack_no, shape) {
+  // A rack with no group row — possible for a warehouse built before groups
+  // existed. Give it one rather than leave the list unable to describe it.
+  if (!group) return [{ rack_from: rack_no, rack_to: rack_no, ...shape }];
+
+  const old = { shelves: group.shelves, bins: group.bins, bin_capacity: group.bin_capacity };
+  const pieces = [];
+  if (group.rack_from < rack_no) {
+    pieces.push({ rack_from: group.rack_from, rack_to: rack_no - 1, ...old });
+  }
+  pieces.push({ rack_from: rack_no, rack_to: rack_no, ...shape });
+  if (group.rack_to > rack_no) {
+    pieces.push({ rack_from: rack_no + 1, rack_to: group.rack_to, ...old });
+  }
+  return pieces;
+}

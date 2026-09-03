@@ -814,3 +814,46 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 @media (prefers-reduced-motion: reduce) {
   .fa-spin { animation-duration: 1.8s !important; }
 }
+
+/* Rack Management: the pencil on a rack tile.
+   Sits left of the status dot rather than under it, and stays visible instead
+   of appearing on hover — a warehouse user does not go hunting over tiles for
+   controls that are not there until touched. Muted until hover so a grid of a
+   hundred racks does not turn into a grid of a hundred pencils. */
+.rack-card-edit {
+  position: absolute; top: 4px; right: 20px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted); opacity: .55;
+  font-size: 11px; cursor: pointer;
+  transition: all var(--transition);
+}
+.rack-card-edit:hover { opacity: 1; color: var(--primary); background: var(--bg); }
+
+/* The edit dialog's "what this will do" line. Green when the rack only grows,
+   amber when bins are being removed — an empty bin is nothing to mourn, but it
+   should never disappear without having been named first. */
+.rack-edit-effect { font-size: 13px; line-height: 1.6; }
+.rack-edit-effect .removing { color: var(--warning); }
+
+/* Picklist entry: Item, Color and the size run on one row.
+   The size run gets the largest share because it is the only part that grows —
+   two fixed boxes need no more room, seven sizes do. Below 1100px the sizes
+   drop to their own full-width line rather than squeezing; the boxes themselves
+   then wrap inside it (.size-run already does), so no size is ever hidden.
+   Hiding one would mean stock that never gets picked. */
+.picklist-entry-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(170px, .8fr) minmax(300px, 2.4fr);
+  gap: 16px;
+  align-items: start;
+}
+.picklist-entry-row.no-sizes {
+  grid-template-columns: minmax(200px, 1fr) minmax(170px, .8fr);
+}
+@media (max-width: 1100px) {
+  .picklist-entry-row { grid-template-columns: 1fr 1fr; }
+  .picklist-entry-row > :nth-child(3) { grid-column: 1 / -1; }
+}

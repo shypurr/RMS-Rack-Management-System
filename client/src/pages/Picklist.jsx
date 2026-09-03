@@ -261,7 +261,12 @@ export default function Picklist() {
         </div>
       </div>
 
-      <div className="grid gap-col-6" style={{ gridTemplateColumns: '1fr 340px', alignItems: 'start' }}>
+      {/* One column. The Summary panel that used to sit on the right repeated
+          what the page already says in place — the challan table has its own
+          Total row, shortages are the red badges on each line, and "ready to
+          pick" is in the generated picklist's own header. Its 340px is worth
+          more to the size run, which is the part that actually grows. */}
+      <div>
         <div>
           {/* Step 1 — the challan itself (overflow:visible so the module dropdown isn't clipped) */}
           <div className="card mb-4" style={{ overflow: 'visible' }}>
@@ -354,7 +359,7 @@ export default function Picklist() {
                     {blocks.length > 0 && <span className="text-muted font-600">&nbsp;— same design in another colour goes in as its own item</span>}
                   </div>
 
-                  <div className="grid cols-2 gap-col-4">
+                  <div className={`picklist-entry-row ${draftSizes.length ? '' : 'no-sizes'}`}>
                     <div className="form-group">
                       <label className="form-label">Item / Design <span className="required">*</span></label>
                       <ItemCombobox
@@ -377,11 +382,14 @@ export default function Picklist() {
                           onChange={(e) => { setDraft({ ...draft, color: e.target.value, sizeQty: {} }); setCapped({}); }} />
                       )}
                     </div>
-                  </div>
 
                   {/* The size run — one design across a row of sizes, the shape
                       the challan itself uses. Each box is hard-capped: stock
-                      cannot leave the warehouse that isn't in it. */}
+                      cannot leave the warehouse that isn't in it.
+
+                      It sits in the SAME row as Item and Color, in the width the
+                      Summary panel used to take. It is the part that grows: two
+                      fixed boxes do not need more room, seven sizes do. */}
                   {draftSizes.length > 0 && (
                     <div className="form-group">
                       <label className="form-label">Quantity per size</label>
@@ -414,6 +422,7 @@ export default function Picklist() {
                       )}
                     </div>
                   )}
+                  </div>
 
                   {draft.item && !draft.color && draftColors.length > 0 && (
                     <p className="text-xs text-muted mb-3">Pick a colour to see its size run.</p>
@@ -449,33 +458,8 @@ export default function Picklist() {
           </button>
         </div>
 
-        {/* Right summary */}
-        <div>
-          <div className="card">
-            <div className="card-header"><span className="card-title">Summary</span></div>
-            <div className="card-body">
-              {/* Only the module tab knows a challan number — manual entry is
-                  item details only, so there is nothing to show here. */}
-              {mode === 'module' && (
-                <>
-                  <SummaryRow label="Challan No" value={dcNo || '—'} />
-                  <hr className="divider" />
-                </>
-              )}
-              <SummaryRow label="Items on the challan" value={blocks.length || '—'} />
-              <SummaryRow label="Different items" value={detail ? detail.rows.length : lines.length || '—'} />
-              <SummaryRow label="Total quantity" value={totals ? totals.qty : lineTotal || '—'} />
-              <SummaryRow label="Found in racks" value={totals ? totals.available : '—'} />
-              <SummaryRow label="Not enough stock" value={totals ? totals.short : '—'} />
-              <hr className="divider" />
-              <SummaryRow label="Ready to pick" value={detail ? totalPicked : '—'} />
-            </div>
-          </div>
-        </div>
-
-        {/* Picklist — full width below both columns; the rack column needs the room */}
         {detail && (
-          <div className="card" style={{ gridColumn: '1 / -1' }}>
+          <div className="card">
             <div className="card-header">
               <span className="card-title"><i className="fa-solid fa-clipboard-list text-primary-color" />&nbsp; Picklist{detail.dcNo ? ` — ${detail.dcNo}` : ''}</span>
               <span className="flex items-center gap-3">
@@ -674,15 +658,6 @@ function Field({ label, value, onChange, type = 'text', required, placeholder })
       <input className="form-control" type={type} value={value} placeholder={placeholder}
         min={type === 'number' ? 0 : undefined}
         onChange={(e) => onChange(e.target.value)} />
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }) {
-  return (
-    <div className="flex items-center" style={{ justifyContent: 'space-between', padding: '4px 0' }}>
-      <span className="text-sm text-muted">{label}</span>
-      <span className="font-600 text-sm truncate" style={{ maxWidth: 180 }}>{value}</span>
     </div>
   );
 }

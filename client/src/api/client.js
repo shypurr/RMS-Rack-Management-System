@@ -60,11 +60,16 @@ export const api = {
   // when the organization grows, so they cannot address a row.
   getRack: (id) => request(`/racks/${id}`),
 
-  // Rack layout (setup screen). `addRacks` appends one batch of racks after the
-  // ones already there — it is the only call that changes the layout, and it
-  // cannot remove anything. Removing racks is a separate flow.
+  // Rack layout. `addRacks` appends one batch after the racks already there and
+  // cannot remove anything, whatever it is sent.
+  //
+  // `editRack` reshapes ONE existing rack and therefore can remove bins —
+  // making a rack smaller deletes the ones that no longer exist. The server
+  // refuses if that rack holds any stock, so the only bins it can ever delete
+  // are empty ones. Removing a rack outright is still a separate flow.
   layout: () => request('/layout'),
   addRacks: (body) => request('/layout/racks', { method: 'POST', body }),
+  editRack: (rackNo, body) => request(`/layout/racks/${rackNo}`, { method: 'PATCH', body }),
 
   addItem: (payload) => request('/item-locations', { method: 'POST', body: payload }),
   findPlacements: (item, color = '', size = '') =>

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getLayout, addRacks } from '../services/layoutService.js';
+import { getLayout, addRacks, editRack } from '../services/layoutService.js';
 import { requireLayoutPermission } from '../middleware/requireLayoutPermission.js';
 
 const router = Router();
@@ -26,6 +26,22 @@ router.post('/racks', requireLayoutPermission, async (req, res, next) => {
     const { racks, shelves, bins, bin_capacity } = req.body || {};
     res.json(await addRacks(req.org.id, {
       racks, shelves, bins, bin_capacity, userId: req.org.vastra_org_id,
+    }));
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/layout/racks/:rackNo — reshape one existing rack.
+//
+// Separate from POST above on purpose. That route appends and can never delete;
+// this one can, because making a rack smaller removes bins. Keeping them apart
+// means the destructive path is addressed by a single rack number and refuses
+// outright on anything with stock in it — so the damage a wrong number here can
+// do is bounded to one empty rack.
+router.patch('/racks/:rackNo', requireLayoutPermission, async (req, res, next) => {
+  try {
+    const { shelves, bins, bin_capacity } = req.body || {};
+    res.json(await editRack(req.org.id, req.params.rackNo, {
+      shelves, bins, bin_capacity, userId: req.org.vastra_org_id,
     }));
   } catch (err) { next(err); }
 });

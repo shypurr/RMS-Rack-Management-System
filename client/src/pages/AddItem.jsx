@@ -258,9 +258,6 @@ export default function AddItem() {
   const allSaved = rows.length > 0 && rows.every((r) => r.saved || !r.item.trim());
   const startOver = () => { setDocId(''); setRows([newRow()]); setTxnResetKey((k) => k + 1); };
 
-  const totalQty = rows.reduce((s, r) => s + num(r.qty), 0);
-  const totalAllocated = rows.reduce((s, r) => s + allocatedOn(r), 0);
-
   return (
     <>
       <div className="breadcrumb-bar"><span>Putaway</span></div>
@@ -271,7 +268,12 @@ export default function AddItem() {
         </div>
       </div>
 
-      <div className="grid gap-col-6" style={{ gridTemplateColumns: '1fr 320px', alignItems: 'start' }}>
+      {/* One column. The Summary panel that used to sit on the right repeated
+          what the table already says better in place — the document is in the
+          Step 2 heading, and "still to place" is the per-item "All 120 have a
+          rack ✓". Its 320px is worth more to the rack pickers than to a second
+          copy of the same numbers. */}
+      <div>
         <div>
           {/* Step 1 — source (overflow:visible so the txn dropdown isn't clipped) */}
           <div className="card mb-4" style={{ overflow: 'visible' }}>
@@ -387,25 +389,6 @@ export default function AddItem() {
                 &nbsp; {saving ? 'Adding…' : 'Add to racks'}
               </button>
             )}
-          </div>
-        </div>
-
-        {/* Right summary */}
-        <div>
-          <div className="card">
-            <div className="card-header"><span className="card-title">Summary</span></div>
-            <div className="card-body">
-              <SummaryRow label="Mode" value={mode === 'source' ? 'Source Module' : 'Manual'} />
-              <SummaryRow label="Document" value={docId || '—'} />
-              <SummaryRow label="Module" value={mode === 'source' ? moduleType : '—'} />
-              <hr className="divider" />
-              <SummaryRow label="Items" value={rows.filter((r) => r.item.trim()).length || '—'} />
-              <SummaryRow label="Total quantity" value={totalQty || '—'} />
-              <SummaryRow label="Given a rack" value={totalAllocated || '—'} />
-              <SummaryRow label="Still to place" value={Math.max(0, totalQty - totalAllocated) || '—'} />
-              <hr className="divider" />
-              <SummaryRow label="Added to racks" value={rows.filter((r) => r.saved).length || '—'} />
-            </div>
           </div>
         </div>
       </div>
@@ -676,15 +659,6 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
           }) : <div className="txn-option text-muted">No racks match</div>}
         </div>
       )}
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }) {
-  return (
-    <div className="flex items-center" style={{ justifyContent: 'space-between', padding: '4px 0' }}>
-      <span className="text-sm text-muted">{label}</span>
-      <span className="font-600 text-sm truncate" style={{ maxWidth: 170 }}>{value}</span>
     </div>
   );
 }

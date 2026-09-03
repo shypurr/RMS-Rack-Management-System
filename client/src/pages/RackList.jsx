@@ -33,6 +33,7 @@ export default function RackList() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [openRackNo, setOpenRackNo] = useState(null);
+  const [editing, setEditing] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -118,6 +119,43 @@ export default function RackList() {
 
   const openRack = racks.find((r) => r.rack_no === openRackNo) || null;
 
+  // A rack with anything in it cannot be reshaped: changing its shelves or bins
+  // deletes bins, and a bin holding stock cannot be deleted without losing
+  // track of that stock in the real warehouse.
+  //
+  // The refusal names what is in the way. "Only empty racks can be edited" is
+  // true but leaves the user to go and work out which of 21 bins is holding
+  // things up — the numbers are already on this screen, so it may as well say.
+  //
+  // This check is a courtesy, not the guard: the server re-checks inside the
+  // transaction with the rows locked, because stock can arrive from another
+  // computer between this page loading and the dialog being saved.
+  const openEdit = (rack) => {
+    if (rack.used > 0) {
+      const usedBins = rack.bins.filter((b) => Number(b.used) > 0).length;
+      toast(
+        `${rack.rack_id} has ${rack.used} item${rack.used === 1 ? '' : 's'} in ` +
+        `${usedBins} bin${usedBins === 1 ? '' : 's'}. Move them out first, then you ` +
+        'can change this rack.',
+        'warning'
+      );
+      return;
+    }
+    setEditing(rack);
+  };
+
+  const editDialog = editing && (
+    <EditRackDialog
+      rack={editing}
+      onClose={() => setEditing(null)}
+      onSaved={async (summary) => {
+        setEditing(null);
+        toast(summary, 'success');
+        await load();
+      }}
+    />
+  );
+
   // Nothing on this screen changes stock. Quantities are set by Putaway, taken
   // by the Picklist and relocated by Move Item — each of those is a real
   // warehouse event with an audit trail behind it. Typing a new number into a
@@ -126,11 +164,15 @@ export default function RackList() {
 
   if (openRack) {
     return (
-      <RackDetail
-        rack={openRack}
-        itemsByBin={itemsByBin}
-        onBack={() => setOpenRackNo(null)}
-      />
+      <>
+        <RackDetail
+          rack={openRack}
+          itemsByBin={itemsByBin}
+          onBack={() => setOpenRackNo(null)}
+          onEdit={() => openEdit(openRack)}
+        />
+        {editDialog}
+      </>
     );
   }
 
@@ -195,6 +237,7 @@ export default function RackList() {
                   rack={r}
                   subtitle={`${r.shelves} shelves · ${r.bins.length} bins`}
                   onClick={() => setOpenRackNo(r.rack_no)}
+                  onEdit={() => openEdit(r)}
                 />
               ))}
             </div>
@@ -203,6 +246,8 @@ export default function RackList() {
           )}
         </div>
       </div>
+
+      {editDialog}
     </>
   );
 }
@@ -210,7 +255,7 @@ export default function RackList() {
 // One rack, opened: its shelves in order, each shelf's bins beside it, and the
 // stock in every bin. Full width because a rack is as wide as its shelves are —
 // a 13-bin shelf has nowhere to go in a dialog.
-function RackDetail({ rack, itemsByBin, onBack }) {
+function RackDetail({ rack, itemsByBin, onBack, onEdit }) {
   const p = pct(rack.used, rack.capacity);
 
   const shelves = useMemo(() => {
@@ -239,9 +284,17 @@ function RackDetail({ rack, itemsByBin, onBack }) {
           <h1 className="page-title">{rack.rack_id}</h1>
           <p className="page-subtitle">{shelves.length} shelves · {rack.bins.length} bins</p>
         </div>
-        <button className="btn btn-outline" onClick={onBack}>
-          <i className="fa-solid fa-arrow-left" />&nbsp; All racks
-        </button>
+        <div className="flex gap-3">
+          {/* Also here, not only on the tile: someone who has opened a rack and
+              seen for themselves that it is empty should not have to go back
+              out to the grid to change it. */}
+          <button className="btn btn-outline" onClick={onEdit}>
+            <i className="fa-solid fa-pen" />&nbsp; Edit this rack
+          </button>
+          <button className="btn btn-outline" onClick={onBack}>
+            <i className="fa-solid fa-arrow-left" />&nbsp; All racks
+          </button>
+        </div>
       </div>
 
       <div className="card mb-4">
@@ -342,6 +395,131 @@ function Stat({ label, value }) {
     <div style={{ textAlign: 'center', flex: 1, background: 'var(--bg)', padding: 12, borderRadius: 'var(--radius-md)' }}>
       <div className="font-700" style={{ fontSize: 18 }}>{value}</div>
       <div className="text-xs text-muted">{label}</div>
+    </div>
+  );
+}
+
+// Reshaping one rack: how many shelves it has, how many bins on each shelf, and
+// how much fits in a bin.
+//
+// Only ever opened for a rack with nothing in it. The caller checks before
+// opening so the refusal is instant; the server checks again with the rows
+// locked, because stock can arrive from another computer in between.
+//
+// The rack's NUMBER is not on this form. R001 is painted on a real rack in a
+// real warehouse — renaming it here would rename nothing there.
+function EditRackDialog({ rack, onClose, onSaved }) {
+  const toast = useToast();
+
+  // The current shape, read back off the rack's own bins. There is no
+  // rack-level row to read it from: rack_master holds one row per bin, so
+  // "7 shelves" is a count of distinct shelf numbers rather than a stored
+  // figure, and the capacity is one bin's, not the rack's.
+  const current = useMemo(() => ({
+    shelves: new Set(rack.bins.map((b) => b.shelf_no)).size,
+    bins: Math.max(...rack.bins.map((b) => b.bin_no)),
+    bin_capacity: Math.max(...rack.bins.map((b) => Number(b.capacity))),
+  }), [rack]);
+
+  const [form, setForm] = useState({
+    shelves: String(current.shelves),
+    bins: String(current.bins),
+    bin_capacity: String(current.bin_capacity),
+  });
+  const [busy, setBusy] = useState(false);
+
+  const n = (v) => Number(v) || 0;
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v.replace(/[^0-9]/g, '') }));
+
+  const complete = n(form.shelves) > 0 && n(form.bins) > 0 && n(form.bin_capacity) > 0;
+  const binsAfter = n(form.shelves) * n(form.bins);
+  const removing = Math.max(0, rack.bins.length - binsAfter);
+  const adding = Math.max(0, binsAfter - rack.bins.length);
+  const unchanged = complete
+    && n(form.shelves) === current.shelves
+    && n(form.bins) === current.bins
+    && n(form.bin_capacity) === current.bin_capacity;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const res = await api.editRack(rack.rack_no, {
+        shelves: n(form.shelves), bins: n(form.bins), bin_capacity: n(form.bin_capacity),
+      });
+      onSaved(`${res.label} now has ${res.shelves} shelves and ${res.binsAfter} bins.`);
+    } catch (e) {
+      // Most likely something was put into the rack while this dialog was open.
+      // The message from the server says so and names the amount, so it is
+      // shown as it is rather than replaced with a generic failure.
+      toast(e.message, 'error');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop open" onMouseDown={() => !busy && onClose()}>
+      <div className="modal" style={{ maxWidth: 480 }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="modal-title">Edit {rack.rack_id}</span>
+          <div className="modal-close" onClick={() => !busy && onClose()}>
+            <i className="fa-solid fa-xmark" />
+          </div>
+        </div>
+
+        <div className="modal-body">
+          <div className="grid cols-3 gap-col-4">
+            <div>
+              <label className="form-label">Shelves</label>
+              <input className="form-control" type="number" min="1" autoFocus
+                value={form.shelves} onChange={(e) => set('shelves', e.target.value)} />
+            </div>
+            <div>
+              <label className="form-label">Bins per shelf</label>
+              <input className="form-control" type="number" min="1"
+                value={form.bins} onChange={(e) => set('bins', e.target.value)} />
+            </div>
+            <div>
+              <label className="form-label">Capacity per bin</label>
+              <input className="form-control" type="number" min="1"
+                value={form.bin_capacity} onChange={(e) => set('bin_capacity', e.target.value)} />
+            </div>
+          </div>
+
+          {/* What the numbers add up to, before they are saved. Capacity per bin
+              is the one people read as "how many bins" — spelling out both
+              figures is what stops a 10 meant as bins arriving as capacity. */}
+          {complete ? (
+            <p className="rack-edit-effect text-muted mt-4">
+              {rack.rack_id} will have <strong>{form.shelves}</strong> shelves of{' '}
+              <strong>{form.bins}</strong> bins — <strong>{binsAfter.toLocaleString()}</strong> bins
+              in all, holding <strong>{form.bin_capacity}</strong> each, so{' '}
+              <strong>{(binsAfter * n(form.bin_capacity)).toLocaleString()}</strong> in total.
+              <br />
+              {removing > 0 && (
+                <span className="removing">
+                  <i className="fa-solid fa-triangle-exclamation" />&nbsp;
+                  This removes {removing.toLocaleString()} empty bin{removing === 1 ? '' : 's'} from
+                  this rack. Nothing is stored in them.
+                </span>
+              )}
+              {adding > 0 && <>This adds {adding.toLocaleString()} new bin{adding === 1 ? '' : 's'}.</>}
+              {removing === 0 && adding === 0 && (unchanged
+                ? 'Nothing has changed yet.'
+                : 'The same number of bins, with a different capacity.')}
+            </p>
+          ) : (
+            <p className="text-sm text-muted mt-4">Fill in all three numbers.</p>
+          )}
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-primary" onClick={save} disabled={busy || !complete || unchanged}>
+            <i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-check'}`} />
+            &nbsp; {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
