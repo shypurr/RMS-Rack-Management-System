@@ -3,8 +3,6 @@ import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { Line, Pie, sevenDayTrend } from '../lib/charts.js';
 import { MANUAL, matches, moduleCode } from '../lib/items.js';
-import { usePaged } from '../lib/paging.js';
-import LoadMore from '../components/LoadMore.jsx';
 
 const REPORTS = {
   inventory: {
@@ -62,17 +60,11 @@ export default function Reports() {
   // report — module code, item name, rack, user, whatever the report shows.
   const visibleRows = rows.filter((r) => matches(r.join(' '), query));
 
-  // Paging is for the TABLE only. The CSV below deliberately keeps reading
-  // visibleRows — every row the filter matched, not the ten on screen. An
-  // export that quietly shrank to a page would be the worst kind of bug: the
-  // file looks complete and is missing most of the report.
-  const page = usePaged(visibleRows, { resetKey: `${active}|${query}` });
-
   const exportCSV = () => {
     if (!active || !visibleRows.length) return;
     const { headers, title } = REPORTS[active];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    // Every row the filter matched, not just the page being shown.
+    // Exports what's on screen, filter included.
     const csv = [headers.map(esc).join(','), ...visibleRows.map((r) => r.map(esc).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a');
@@ -157,7 +149,7 @@ export default function Reports() {
               <table className="data-table">
                 <thead><tr>{REPORTS[active].headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {page.visible.map((r, i) => (
+                  {visibleRows.map((r, i) => (
                     // Only the audit report's Before/After columns hold raw JSON
                     // wide enough to need the smaller type.
                     <tr key={i}>{r.map((c, j) => <td key={j} className={active === 'audit' && j >= 4 ? 'text-xs' : ''} style={{ maxWidth: 240 }}>{String(c)}</td>)}</tr>
@@ -170,9 +162,6 @@ export default function Reports() {
                 <p>{rows.length ? 'No rows match your search' : 'No rows'}</p>
               </div>
             )}
-          </div>
-          <div className="card-body" style={{ paddingTop: 0 }}>
-            <LoadMore {...page} noun="rows" onMore={page.loadMore} />
           </div>
         </div>
       )}

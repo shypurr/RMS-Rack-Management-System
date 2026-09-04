@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { countBins, countCapacity, nextRackRange, mergeGroups, rangeLabel } from '../lib/layout.js';
-import { usePaged } from '../lib/paging.js';
-import LoadMore from '../components/LoadMore.jsx';
 
 // Rack layout setup.
 //
@@ -34,7 +32,6 @@ export default function RackSetup() {
   const groups = data?.groups ?? [];
   // Batches of identical shape read as one kind of rack — see mergeGroups.
   const rows = mergeGroups(groups);
-  const groupPage = usePaged(rows);
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const projectedBins = countBins(form);
@@ -107,7 +104,7 @@ export default function RackSetup() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groupPage.visible.map((g, i) => (
+                  {rows.map((g, i) => (
                     <tr key={g.key}>
                       <td className="text-muted">{i + 1}</td>
                       <td className="font-600 text-primary-color">
@@ -125,7 +122,6 @@ export default function RackSetup() {
                 </tbody>
               </table>
             </div>
-            <LoadMore {...groupPage} noun="rows" onMore={groupPage.loadMore} />
             <p className="text-xs text-muted mt-3">
               One row per kind of rack — batches with the same shelves, bins and capacity are
               counted together, however many visits it took to add them. Change any one of those

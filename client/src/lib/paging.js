@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 
-// Ten rows at a time, everywhere.
+// Ten rows at a time, on the three screens that need it.
 //
-// Nothing in this app renders a whole table any more. A warehouse that has been
-// running for a year has tens of thousands of stock rows and audit entries, and
-// a browser asked to lay out all of them at once stops responding — on the
-// hardware a warehouse actually has, well before the data looks large to anyone
-// reading a row count.
+// Those are Move Item, History and the Audit Log: the lists that grow without
+// limit as the warehouse runs. A year of trading is tens of thousands of audit
+// entries, and a browser asked to lay all of them out at once stops responding
+// long before the number looks large to anyone reading it.
+//
+// It is deliberately NOT applied everywhere. Rack Management shows every rack,
+// because the whole point of that screen is seeing the warehouse at a glance
+// and a rack count is fixed by the building, not by how long you have been
+// trading. Item Management, Reports, Rack Setup and the Rack Report are left
+// whole for the same reason: their size is bounded by things that do not keep
+// growing on their own.
 //
 // The rule lives here rather than in each page so it is one number in one
-// place. Change PAGE_SIZE and every list in the portal changes with it.
+// place. Change PAGE_SIZE and those three screens change with it.
 export const PAGE_SIZE = 10;
 
 // Paging over a list the page already holds in memory (a filtered array, a

@@ -102,9 +102,10 @@ export default function MoveItem() {
               <span className="input-icon"><i className="fa-solid fa-search" /></span>
               <input className="form-control" placeholder="Search module code (e.g. SGR-1), item, color or size…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
-            {/* No inner scrollbox any more: ten rows fit, and the list below
-                says how many more there are. */}
-            <div className="data-table-wrap">
+            {/* Scrolls inside the card rather than stretching it: "Show 10
+                more" must not walk the button down the page. The count below
+                sits outside the scroll area so it is always in view. */}
+            <div className="data-table-wrap scroll-list">
               <table className="data-table">
                 <thead><tr><th>Item</th><th>Color</th><th>Size</th><th>Total</th><th></th></tr></thead>
                 <tbody>
@@ -145,7 +146,8 @@ export default function MoveItem() {
             ) : (
               <>
                 <p className="text-sm text-muted mb-3">Stored in {placements.length} rack{placements.length > 1 ? 's' : ''} — pick one to move from:</p>
-                <div className="grid cols-2 gap-col-4 mb-4">
+                <div className="scroll-list scroll-list-compact mb-4">
+                <div className="grid cols-2 gap-col-4">
                   {placementPage.visible.map((p) => {
                     const chosen = source?.id === p.id;
                     return (
@@ -158,6 +160,7 @@ export default function MoveItem() {
                       </div>
                     );
                   })}
+                </div>
                 </div>
                 <LoadMore {...placementPage} noun="racks" onMore={placementPage.loadMore} />
                 {source && (

@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { MANUAL, matches, moduleCode } from '../lib/items.js';
-import { usePaged } from '../lib/paging.js';
-import LoadMore from '../components/LoadMore.jsx';
 
 export default function ItemManagement() {
   const toast = useToast();
@@ -47,7 +45,6 @@ export default function ItemManagement() {
 
   // Find by item name or by module code — both, on purpose.
   const filtered = groups.filter((g) => matches(`${g.item} ${g.code} ${g.moduleType || ''}`, search));
-  const page = usePaged(filtered, { resetKey: search });
 
   const totalUnits = groups.reduce((s, g) => s + g.total, 0);
   const docCount = new Set(groups.filter((g) => g.code !== MANUAL).map((g) => g.code)).size;
@@ -90,12 +87,11 @@ export default function ItemManagement() {
               {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 48 }} />)}
             </div>
           ) : filtered.length ? (
-            <>
             <div className="data-table-wrap">
               <table className="data-table">
                 <thead><tr><th>Module</th><th>Item</th><th>Total Qty</th><th>Racks</th><th></th></tr></thead>
                 <tbody>
-                  {page.visible.map((g) => (
+                  {filtered.map((g) => (
                     <tr key={g.key}>
                       <td><ModuleCell code={g.code} type={g.moduleType} /></td>
                       <td className="font-600">{g.item}</td>
@@ -107,8 +103,6 @@ export default function ItemManagement() {
                 </tbody>
               </table>
             </div>
-            <LoadMore {...page} noun="items" onMore={page.loadMore} />
-            </>
           ) : (
             <div className="empty-state"><i className="fa-solid fa-box-open" /><p>No items match your search</p></div>
           )}
@@ -136,7 +130,6 @@ function ItemModal({ group, onClose }) {
   const rows = [...group.rows].sort((a, b) =>
     (a.color || '').localeCompare(b.color || '') || (a.size || '').localeCompare(b.size || '')
   );
-  const page = usePaged(rows);
   return (
     <div className="modal-backdrop open" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 680 }}>
@@ -159,7 +152,7 @@ function ItemModal({ group, onClose }) {
             <table className="data-table">
               <thead><tr><th>Color</th><th>Size</th><th>Rack</th><th>Qty</th></tr></thead>
               <tbody>
-                {page.visible.map((r) => (
+                {rows.map((r) => (
                   <tr key={r.id}>
                     <td>{r.color || '—'}</td>
                     <td>{r.size || '—'}</td>
@@ -170,7 +163,6 @@ function ItemModal({ group, onClose }) {
               </tbody>
             </table>
           </div>
-          <LoadMore {...page} noun="placements" onMore={page.loadMore} />
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Close</button>

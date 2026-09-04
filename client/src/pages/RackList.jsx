@@ -4,8 +4,6 @@ import { useToast } from '../components/Toast.jsx';
 import RackCard from '../components/RackCard.jsx';
 import { pct, pctColorClass, occupancyBucket } from '../lib/rack.js';
 import { MANUAL, matches, searchText } from '../lib/items.js';
-import { usePaged } from '../lib/paging.js';
-import LoadMore from '../components/LoadMore.jsx';
 
 // Rack Management, two levels deep: racks, then one rack's shelves and bins.
 //
@@ -118,10 +116,6 @@ export default function RackList() {
       matches(`${r.rack_id} ${rackText.get(r.rack_no) || ''}`, search) &&
       (!statusFilter || r.status === statusFilter)
   );
-
-  // Ten rack tiles at a time. A warehouse of a hundred racks drew a hundred
-  // tiles with a progress bar in each, on every keystroke of the search box.
-  const rackPage = usePaged(filtered, { resetKey: `${search}|${statusFilter}` });
 
   const openRack = racks.find((r) => r.rack_no === openRackNo) || null;
 
@@ -236,9 +230,8 @@ export default function RackList() {
               {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 100 }} />)}
             </div>
           ) : filtered.length ? (
-            <>
             <div className="grid cols-4 gap-col-4">
-              {rackPage.visible.map((r) => (
+              {filtered.map((r) => (
                 <RackCard
                   key={r.rack_no}
                   rack={r}
@@ -248,8 +241,6 @@ export default function RackList() {
                 />
               ))}
             </div>
-            <LoadMore {...rackPage} noun="racks" onMore={rackPage.loadMore} />
-            </>
           ) : (
             <div className="empty-state"><i className="fa-solid fa-box-open" /><p>No racks match your filters</p></div>
           )}
@@ -280,8 +271,6 @@ function RackDetail({ rack, itemsByBin, onBack, onEdit }) {
       .sort((a, z) => a.shelf_no - z.shelf_no)
       .map((s) => ({ ...s, bins: s.bins.slice().sort((a, z) => a.bin_no - z.bin_no) }));
   }, [rack]);
-
-  const shelfPage = usePaged(shelves, { resetKey: rack.rack_no });
 
   return (
     <>
@@ -320,44 +309,31 @@ function RackDetail({ rack, itemsByBin, onBack, onEdit }) {
         </div>
       </div>
 
-      {shelfPage.visible.map((s) => (
-        <ShelfCard key={s.shelf_no} shelf={s} itemsByBin={itemsByBin} />
+      {shelves.map((s) => (
+        <div key={s.shelf_no} className="card mb-4">
+          <div className="card-header">
+            <span className="card-title">
+              <i className="fa-solid fa-layer-group text-primary-color" />&nbsp; Shelf {s.label}
+            </span>
+            <span className="text-sm text-muted ml-auto">
+              {s.used.toLocaleString()} / {s.capacity.toLocaleString()} used · {s.bins.length} bins
+            </span>
+          </div>
+          <div className="card-body">
+            <div className="bin-row">
+              {s.bins.map((b) => (
+                <BinCard key={b.id} bin={b} items={itemsByBin.get(b.id) || []} />
+              ))}
+            </div>
+          </div>
+        </div>
       ))}
-      <LoadMore {...shelfPage} noun="shelves" onMore={shelfPage.loadMore} />
 
-      <p className="text-xs text-muted mt-4">
+      <p className="text-xs text-muted">
         This is a read-only view of what is on the shelf. Stock arrives through Putaway,
         leaves through the Picklist, and changes rack through Move Item.
       </p>
     </>
-  );
-}
-
-// One shelf, and ten of its bins at a time. A shelf is its own component
-// because each one carries its own "show ten more" — a rack of 7 shelves × 21
-// bins is 147 bin cards, each with a progress bar and a small table inside, and
-// that one screen was the heaviest thing the portal drew.
-function ShelfCard({ shelf, itemsByBin }) {
-  const page = usePaged(shelf.bins, { resetKey: shelf.shelf_no });
-  return (
-    <div className="card mb-4">
-      <div className="card-header">
-        <span className="card-title">
-          <i className="fa-solid fa-layer-group text-primary-color" />&nbsp; Shelf {shelf.label}
-        </span>
-        <span className="text-sm text-muted ml-auto">
-          {shelf.used.toLocaleString()} / {shelf.capacity.toLocaleString()} used · {shelf.bins.length} bins
-        </span>
-      </div>
-      <div className="card-body">
-        <div className="bin-row">
-          {page.visible.map((b) => (
-            <BinCard key={b.id} bin={b} items={itemsByBin.get(b.id) || []} />
-          ))}
-        </div>
-        <LoadMore {...page} noun="bins" onMore={page.loadMore} />
-      </div>
-    </div>
   );
 }
 
@@ -366,7 +342,6 @@ function ShelfCard({ shelf, itemsByBin }) {
 // than a missing tile would.
 function BinCard({ bin, items }) {
   const p = pct(bin.used, bin.capacity);
-  const page = usePaged(items, { resetKey: bin.id });
   return (
     <div className={`bin-card ${occupancyBucket(bin.used, bin.capacity)}`}>
       <div className="flex items-center gap-2">
@@ -378,10 +353,9 @@ function BinCard({ bin, items }) {
       </div>
 
       {items.length ? (
-        <>
         <table className="bin-items">
           <tbody>
-            {page.visible.map((it) => (
+            {items.map((it) => (
               <tr key={it.id}>
                 <td>
                   <div className="font-600">{it.item}</div>
@@ -400,10 +374,6 @@ function BinCard({ bin, items }) {
             ))}
           </tbody>
         </table>
-        {/* quiet: a bin usually holds two or three lines, and a footer saying
-            "showing 3 of 3" on every tile would be noise on a 21-bin shelf. */}
-        <LoadMore {...page} noun="lines here" onMore={page.loadMore} quiet />
-        </>
       ) : (
         <div className="text-xs text-muted" style={{ padding: '6px 0' }}>Empty · {bin.capacity} free</div>
       )}

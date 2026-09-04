@@ -867,3 +867,16 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
   padding-top: 12px; margin-top: 12px;
   border-top: 1px solid var(--border);
 }
+
+/* A list that scrolls inside a card instead of stretching it.
+   "Show 10 more" used to make the card taller every press, which pushed
+   everything below it down the page and moved the button out from under the
+   cursor. The card now keeps its height and the rows scroll within it. */
+.scroll-list { max-height: 360px; overflow-y: auto; }
+/* 2px of room so the outline on a selected rack tile is not shaved off by the
+   scroll container's edge. */
+.scroll-list-compact { max-height: 260px; padding: 2px; }
+
+/* Column labels stay put while the rows move under them — otherwise scrolling
+   a long list leaves you looking at columns with no headings. */
+.scroll-list .data-table th { position: sticky; top: 0; z-index: 2; }
