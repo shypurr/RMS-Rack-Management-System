@@ -857,3 +857,13 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
   .picklist-entry-row { grid-template-columns: 1fr 1fr; }
   .picklist-entry-row > :nth-child(3) { grid-column: 1 / -1; }
 }
+
+/* The footer under every paged list: what you are looking at, and the button
+   for the next ten. Wraps rather than squashes on a narrow screen — the count
+   is the half that must stay readable. */
+.load-more {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding-top: 12px; margin-top: 12px;
+  border-top: 1px solid var(--border);
+}

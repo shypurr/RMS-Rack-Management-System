@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { Line, Doughnut, Bar, sevenDayTrend } from '../lib/charts.js';
+import { usePaged } from '../lib/paging.js';
+import LoadMore from '../components/LoadMore.jsx';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
 const ACTION_ICON = { add: 'plus', update: 'pen', move: 'arrow-right-long', remove: 'trash' };
@@ -24,6 +26,10 @@ export default function Dashboard() {
 
   const load = () => api.dashboard().then(setData).catch((e) => toast(e.message, 'error'));
   useEffect(() => { load(); }, []);
+
+  // Declared up here, above the loading return: a hook cannot sit behind a
+  // condition, and usePaged copes with the list not having arrived yet.
+  const recentPage = usePaged(data?.recent);
 
   if (!data) {
     return (
@@ -125,8 +131,10 @@ export default function Dashboard() {
 
         <div className="card">
           <div className="card-header"><span className="card-title"><i className="fa-solid fa-clock-rotate-left text-primary-color" />&nbsp; Recent Activity</span></div>
-          <div style={{ maxHeight: 340, overflowY: 'auto' }}>
-            {data.recent.length ? data.recent.map((r) => (
+          {/* Ten at a time instead of an inner scrollbar. A scrollbox hides how
+              much is below it; a count does not. */}
+          <div>
+            {data.recent.length ? recentPage.visible.map((r) => (
               <div key={r.id} className="notif-item">
                 <div className={`notif-icon-wrap ${ACTION_TONE[r.action] || 'info'}`}><i className={`fa-solid fa-${ACTION_ICON[r.action] || 'circle-info'}`} /></div>
                 <div className="notif-content">
@@ -137,6 +145,9 @@ export default function Dashboard() {
                 <span className={`badge badge-${ACTION_TONE[r.action] === 'danger' ? 'danger' : ACTION_TONE[r.action] === 'warning' ? 'warning' : ACTION_TONE[r.action] === 'info' ? 'primary' : 'success'} text-xs`}>{r.action}</span>
               </div>
             )) : <div className="empty-state" style={{ padding: 32 }}><i className="fa-solid fa-clock-rotate-left" /><p>No activity yet</p></div>}
+            <div style={{ padding: '0 16px 12px' }}>
+              <LoadMore {...recentPage} noun="entries" onMore={recentPage.loadMore} quiet />
+            </div>
           </div>
         </div>
       </div>

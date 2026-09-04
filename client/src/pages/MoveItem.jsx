@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { pct, pctColorClass, sortByEmptiness } from '../lib/rack.js';
 import { matches, moduleCode } from '../lib/items.js';
+import { usePaged } from '../lib/paging.js';
+import LoadMore from '../components/LoadMore.jsx';
+import RackPicker from '../components/RackPicker.jsx';
 
 const variantKey = (r) => `${r.item}|${r.color}|${r.size}`;
 
@@ -40,6 +43,12 @@ export default function MoveItem() {
   const filteredVariants = variants.filter((v) =>
     matches(`${v.item} ${v.color} ${v.size} ${[...v.codes].join(' ')}`, search)
   );
+
+  // Ten items at a time in the picker, and ten racks at a time in the list of
+  // places this one is stored — a design that has been received all year can
+  // sit in dozens of bins.
+  const itemPage = usePaged(filteredVariants, { resetKey: search });
+  const placementPage = usePaged(placements, { resetKey: variant ? variantKey(variant) : '' });
 
   // When a variant is chosen, find every rack that holds it.
   const chooseVariant = async (v) => {
@@ -93,11 +102,13 @@ export default function MoveItem() {
               <span className="input-icon"><i className="fa-solid fa-search" /></span>
               <input className="form-control" placeholder="Search module code (e.g. SGR-1), item, color or size…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
-            <div className="data-table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {/* No inner scrollbox any more: ten rows fit, and the list below
+                says how many more there are. */}
+            <div className="data-table-wrap">
               <table className="data-table">
                 <thead><tr><th>Item</th><th>Color</th><th>Size</th><th>Total</th><th></th></tr></thead>
                 <tbody>
-                  {filteredVariants.map((v) => {
+                  {itemPage.visible.map((v) => {
                     const chosen = variant && variantKey(variant) === variantKey(v);
                     return (
                       <tr key={variantKey(v)} style={{ background: chosen ? 'var(--primary-alpha)' : undefined }}>
@@ -114,6 +125,7 @@ export default function MoveItem() {
                 </tbody>
               </table>
             </div>
+            <LoadMore {...itemPage} noun="items" onMore={itemPage.loadMore} />
           </div>
         </div>
 
@@ -134,7 +146,7 @@ export default function MoveItem() {
               <>
                 <p className="text-sm text-muted mb-3">Stored in {placements.length} rack{placements.length > 1 ? 's' : ''} — pick one to move from:</p>
                 <div className="grid cols-2 gap-col-4 mb-4">
-                  {placements.map((p) => {
+                  {placementPage.visible.map((p) => {
                     const chosen = source?.id === p.id;
                     return (
                       <div key={p.id} className="flex items-center gap-3 p-4" style={{ background: 'var(--bg)', borderRadius: 'var(--radius-md)', outline: chosen ? '2px solid var(--primary)' : 'none', cursor: 'pointer' }} onClick={() => chooseSource(p)}>
@@ -147,6 +159,7 @@ export default function MoveItem() {
                     );
                   })}
                 </div>
+                <LoadMore {...placementPage} noun="racks" onMore={placementPage.loadMore} />
                 {source && (
                   <>
                     <div className="form-group">
@@ -155,7 +168,7 @@ export default function MoveItem() {
                     </div>
                     <div className="form-group">
                       <label className="form-label">Move it to (emptiest racks first)</label>
-                      <RackCombobox key={source.id} candidates={destCandidates} value={toRackId} onChange={setToRackId} />
+                      <RackPicker key={source.id} candidates={destCandidates} value={toRackId} onChange={setToRackId} placeholder="Search rack ID…" />
                     </div>
                     {/* The button belongs with the boxes that decide what it
                         does, not under the picture below — that card only shows
@@ -241,40 +254,3 @@ function ModuleCodes({ codes }) {
   );
 }
 
-// Searchable destination picker: focusing it while empty shows the emptiest
-// racks, and typing filters by rack id live. Client-side, same as AddItem's.
-function RackCombobox({ candidates, value, onChange }) {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const [picked, setPicked] = useState(false);
-  const blurTimer = useRef(null);
-
-  const q = query.trim().toLowerCase();
-  const rackMatches = (picked ? candidates : candidates.filter((r) => r.rack_id.toLowerCase().includes(q))).slice(0, 8);
-
-  const choose = (r) => { setPicked(true); setQuery(r.rack_id); setOpen(false); onChange(r.id); };
-  const onType = (v) => { if (picked) { setPicked(false); onChange(''); } setQuery(v); setOpen(true); };
-
-  return (
-    <div style={{ position: 'relative' }}>
-      <input
-        className="form-control"
-        placeholder="Search rack ID…"
-        value={query}
-        onChange={(e) => onType(e.target.value)}
-        onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
-        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
-      />
-      {open && (
-        <div className="txn-dropdown">
-          {rackMatches.length ? rackMatches.map((r) => (
-            <div key={r.id} className="txn-option" onMouseDown={() => choose(r)}>
-              <span className="font-600 text-primary-color">{r.rack_id}</span>
-              <span className="text-sm text-muted">&nbsp; {r.available} free{r.status === 'Vacant' ? ' · empty' : ''}</span>
-            </div>
-          )) : <div className="txn-option text-muted">No racks match</div>}
-        </div>
-      )}
-    </div>
-  );
-}

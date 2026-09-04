@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
+import { PAGE_SIZE, usePaged } from '../lib/paging.js';
+import LoadMore from '../components/LoadMore.jsx';
 
 // What has actually moved through the racks: stock put away, and picklists
 // generated. Each half reads from where that flow records itself — putaway from
@@ -16,7 +18,10 @@ import { useToast } from '../components/Toast.jsx';
 // The Audit Log tab stays as the raw everything-view; this is the operational
 // read of the same history.
 
-const PAGE = 50;
+// Ten per request, the same as every other list in the portal — and here it is
+// ten fetched from the database, not ten drawn out of a larger fetch. See
+// lib/paging.js for the rule.
+const PAGE = PAGE_SIZE;
 
 // Presets cover the question people actually ask — "what did I pick this week"
 // — without making them operate two date pickers to ask it.
@@ -297,6 +302,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
+  const linePage = usePaged(detail?.lines, { resetKey: row.id });
 
   const toggle = async () => {
     if (open) return setOpen(false);
@@ -373,7 +379,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
                     <tr><th>Item</th><th>Color</th><th>Size</th><th>Quantity</th><th>Racks it came from</th></tr>
                   </thead>
                   <tbody>
-                    {detail.lines.map((l, i) => (
+                    {linePage.visible.map((l, i) => (
                       <tr key={i}>
                         <td className="font-600">{l.item}</td>
                         <td>{l.color || '—'}</td>
@@ -389,6 +395,7 @@ function PicklistRow({ row, printing, onPdf, onUpdate }) {
                     ))}
                   </tbody>
                 </table>
+                <LoadMore {...linePage} noun="items" onMore={linePage.loadMore} quiet />
                 <p className="text-xs text-muted mt-2">
                   These are the items as recorded when the picklist was made
                   {detail.rack_updated && detail.picked_at ? `, picked ${fmt(detail.picked_at)}` : ''}.
