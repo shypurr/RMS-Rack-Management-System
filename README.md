@@ -126,44 +126,8 @@ own schema at boot.
 
 ## Project structure
 
-```
-server/
-  src/
-    index.js            entry point — probes DB + broker, applies migrations, listens
-    app.js              express wiring: middleware, route mounting, static client, error handler
-    db.js               connection pool, applySchema(), withTransaction()
-    schemaMigrations.js one-time migrations + the schema_migration ledger
-    vastraClient.js     the ONLY module that talks to Vastra's HTTP API
-    mqttClient.js       the single broker connection (QR login)
-    routes/             HTTP layer — parse, validate, delegate. One file per resource
-    services/           business logic and SQL. Where the real work happens
-    middleware/         requireAuth.js (session gate), requireLayoutPermission.js
-    lib/                leaf helpers with no dependencies: httpError.js, rackCode.js
-  migrations/           the four .sql files, applied at boot
-  seed.js               demo data (destructive — see above)
-  challanFixtures.js    the sample documents makeChallans.js / makeInwards.js load
-  inwardFixtures.js       (also the catalogue seed.js builds its stock from)
-  check*.js             self-checks, no test framework: `node checkAuth.js`
-  dev*.js               local stand-ins for Vastra's API and broker
-
-client/
-  vite.config.js        dev server on :5173, proxies /api → :4000
-  src/
-    main.jsx            router + auth gate. The route table is here
-    api/client.js       every API call in the app, one thin fetch wrapper
-    pages/              one file per screen
-    components/         shared UI: Layout.jsx (sidebar shell), Toast.jsx,
-                        SetupGate.jsx, RackPicker.jsx, RackCard.jsx,
-                        QrSignIn.jsx, LoadMore.jsx
-    lib/                pure logic, checked separately from the UI by the
-                        *.check.mjs file sitting next to it
-    styles/             style.css + responsive.css
-```
-
-### Where each feature lives
-
-The server is layered **route → service → db**. A route parses and validates; a service holds
-the SQL and the business rules; nothing below `services/` knows about HTTP.
+Server paths are relative to `server/src/`, client paths to `client/src/`. The server is
+layered **route → service → db**: nothing below `services/` knows about HTTP.
 
 | Feature | Server | Client |
 |---------|--------|--------|
@@ -187,9 +151,8 @@ the SQL and the business rules; nothing below `services/` knows about HTTP.
 
 ### Client routes
 
-Defined in `client/src/main.jsx`; every page below lives in `client/src/pages/`. Everything
-except `/login` sits behind an auth gate, and the stock-handling screens additionally sit
-behind `SetupGate`, which redirects to `/setup` when the organization has no bins yet.
+Defined in `main.jsx`; pages live in `pages/`. `SetupGate` redirects to `/setup` when the
+organization has no bins yet.
 
 | Path | Page | Gated by `SetupGate` |
 |------|------|:--:|
@@ -208,8 +171,8 @@ behind `SetupGate`, which redirects to `/setup` when the organization has no bin
 
 ### Self-checks and dev tools
 
-No test framework — each check is a plain script you run with `node`, and it prints its own
-assertions. See [Verify](#verify-matches-plan) for what each one proves.
+No test framework — run each with `node`; it prints its own assertions. See
+[Verify](#verify-matches-plan).
 
 | Script | Covers |
 |--------|--------|
