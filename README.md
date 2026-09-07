@@ -124,6 +124,108 @@ Logins, picklist history and layouts survive, but the warehouse does not. It exi
 demo data into a development database. A staging deploy does not need it: the app builds its
 own schema at boot.
 
+## Project structure
+
+```
+server/
+  src/
+    index.js            entry point — probes DB + broker, applies migrations, listens
+    app.js              express wiring: middleware, route mounting, static client, error handler
+    db.js               connection pool, applySchema(), withTransaction()
+    schemaMigrations.js one-time migrations + the schema_migration ledger
+    vastraClient.js     the ONLY module that talks to Vastra's HTTP API
+    mqttClient.js       the single broker connection (QR login)
+    routes/             HTTP layer — parse, validate, delegate. One file per resource
+    services/           business logic and SQL. Where the real work happens
+    middleware/         requireAuth.js (session gate), requireLayoutPermission.js
+    lib/                leaf helpers with no dependencies: httpError.js, rackCode.js
+  migrations/           the four .sql files, applied at boot
+  seed.js               demo data (destructive — see above)
+  challanFixtures.js    the sample documents makeChallans.js / makeInwards.js load
+  inwardFixtures.js       (also the catalogue seed.js builds its stock from)
+  check*.js             self-checks, no test framework: `node checkAuth.js`
+  dev*.js               local stand-ins for Vastra's API and broker
+
+client/
+  vite.config.js        dev server on :5173, proxies /api → :4000
+  src/
+    main.jsx            router + auth gate. The route table is here
+    api/client.js       every API call in the app, one thin fetch wrapper
+    pages/              one file per screen
+    components/         shared UI: Layout.jsx (sidebar shell), Toast.jsx,
+                        SetupGate.jsx, RackPicker.jsx, RackCard.jsx,
+                        QrSignIn.jsx, LoadMore.jsx
+    lib/                pure logic, checked separately from the UI by the
+                        *.check.mjs file sitting next to it
+    styles/             style.css + responsive.css
+```
+
+### Where each feature lives
+
+The server is layered **route → service → db**. A route parses and validates; a service holds
+the SQL and the business rules; nothing below `services/` knows about HTTP.
+
+| Feature | Server | Client |
+|---------|--------|--------|
+| **Login** (mobile + OTP) | `routes/auth.js` → `services/session.js`, `vastraClient.js` | `pages/Login.jsx`, `lib/otp.js` |
+| **QR login** | `services/qrLogin.js`, `mqttClient.js` | `components/QrSignIn.jsx` |
+| **Dashboard** | `routes/dashboard.js` → `services/dashboardService.js` | `pages/Dashboard.jsx`, `lib/charts.js` |
+| **Rack setup / layout** | `routes/layout.js` → `services/layoutService.js`, `middleware/requireLayoutPermission.js` | `pages/RackSetup.jsx`, `lib/layout.js`, `components/SetupGate.jsx` |
+| **Rack list & drilldown** | `routes/racks.js` → `services/rackService.js` | `pages/RackList.jsx`, `components/RackCard.jsx`, `lib/rack.js` |
+| **Putaway** (Flow A) | `routes/itemLocations.js` → `rackService.addItem`, `findPlacements` | `pages/AddItem.jsx`, `lib/putaway.js` |
+| **Move** (Flow B) | `routes/moves.js` → `rackService.moveItem` | `pages/MoveItem.jsx`, `components/RackPicker.jsx` |
+| **Picklist** (Flow C) | `routes/picklist.js` → `services/picklistStore.js`, `services/picklistPdf.js`, `rackService.pickItems` | `pages/Picklist.jsx` |
+| **Source modules** | `routes/sourceTransactions.js` → `services/sourceModules.js` | `lib/items.js` |
+| **Stock list** | `routes/itemLocations.js` | `pages/ItemManagement.jsx` |
+| **History** | `routes/history.js` → `services/picklistStore.js` | `pages/History.jsx` |
+| **Audit log** | `routes/audit.js` → `services/audit.js` | `pages/AuditLog.jsx` |
+| **Reports** | `routes/dashboard.js`, `routes/racks.js` | `pages/Reports.jsx`, `pages/RackReport.jsx` |
+| **Rack display codes** | `lib/rackCode.js` — derived, never stored | — |
+| **Pagination** | `limit`/`offset` on the route | `lib/paging.js`, `components/LoadMore.jsx` |
+| **Auth gate / errors** | `middleware/requireAuth.js`, `lib/httpError.js` | `api/client.js` (401 → `/login`) |
+| **App shell, theme, toasts** | — | `components/Layout.jsx`, `components/Toast.jsx`, `lib/useTheme.js` |
+
+### Client routes
+
+Defined in `client/src/main.jsx`; every page below lives in `client/src/pages/`. Everything
+except `/login` sits behind an auth gate, and the stock-handling screens additionally sit
+behind `SetupGate`, which redirects to `/setup` when the organization has no bins yet.
+
+| Path | Page | Gated by `SetupGate` |
+|------|------|:--:|
+| `/login` | `Login.jsx` | — |
+| `/` | `Dashboard.jsx` | |
+| `/racks` | `RackList.jsx` | ✓ |
+| `/setup` | `RackSetup.jsx` | |
+| `/items` | `ItemManagement.jsx` | |
+| `/add` | `AddItem.jsx` | ✓ |
+| `/move` | `MoveItem.jsx` | ✓ |
+| `/picklist` | `Picklist.jsx` | ✓ |
+| `/history` | `History.jsx` | |
+| `/reports` | `Reports.jsx` | |
+| `/report` | `RackReport.jsx` | |
+| `/audit` | `AuditLog.jsx` | |
+
+### Self-checks and dev tools
+
+No test framework — each check is a plain script you run with `node`, and it prints its own
+assertions. See [Verify](#verify-matches-plan) for what each one proves.
+
+| Script | Covers |
+|--------|--------|
+| `checkAuth.js` | the Vastra login path end to end |
+| `checkTenancy.js` | cross-organization isolation — that no route leaks between orgs |
+| `checkLayout.js` / `layoutEdit.check.mjs` | rack layout maths, and editing one rack |
+| `checkModules.js` | the Vastra source-module read path |
+| `checkQrLogin.js` | the QR protocol, with no DB, broker or network |
+| `checkRackCode.js` | rack code derivation and re-padding |
+| `checkSessionRecovery.js` | what happens when Vastra stops accepting a stored token |
+| `historySearch.check.mjs` | history filters and server-side paging |
+| `inwardFixtures.check.mjs` | the inward document generator |
+| `client/src/lib/*.check.mjs` | the client's pure logic — `layout`, `otp` and `putaway` — with no browser or server needed |
+| `devBroker.js`, `devFakeVastra.js`, `devPublishQr.js` | local stand-ins so QR login can be driven with no Vastra access at all |
+| `makeChallans.js`, `makeInwards.js` | add sample documents to an existing database — unlike `seed.js`, these drop **nothing** |
+
 ## Login
 
 **Vastra is the identity provider.** Only organizations that already exist in Vastra can use
