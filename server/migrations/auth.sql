@@ -1,7 +1,7 @@
 -- Auth tables — Vastra mobile+OTP login.
 --
--- Deliberately NOT in schema.sql: that file drops and recreates its four tables
--- on every `npm run seed`, which would delete every login. These use
+-- Deliberately NOT in core.sql: `npm run seed` drops and recreates core.sql's
+-- four tables on every run, which would delete every login. These use
 -- CREATE TABLE IF NOT EXISTS and are applied at boot from src/index.js, so
 -- they're idempotent and survive a demo reseed.
 

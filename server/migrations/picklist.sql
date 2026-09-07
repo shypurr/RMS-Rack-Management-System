@@ -1,7 +1,7 @@
 -- Picklist history (Flow C).
 --
--- Deliberately NOT in schema.sql: that file drops and recreates its tables on
--- every `npm run seed`, and this is operational history, not demo data. Applied
+-- Deliberately NOT in core.sql: `npm run seed` drops and recreates core.sql's
+-- tables on every run, and this is operational history, not demo data. Applied
 -- at boot from src/index.js like auth.sql, so an existing database picks it up
 -- without a reseed.
 --

@@ -1,7 +1,7 @@
 -- Per-organization rack layout configuration.
 --
--- Like auth.sql and picklist.sql, deliberately NOT in schema.sql: that file
--- drops and recreates its tables on every `npm run seed`, and a layout is an
+-- Like auth.sql and picklist.sql, deliberately NOT in core.sql: `npm run seed`
+-- drops and recreates core.sql's tables on every run, and a layout is an
 -- organization's real configuration, not demo data. All CREATE TABLE IF NOT
 -- EXISTS, applied at boot from src/index.js.
 --

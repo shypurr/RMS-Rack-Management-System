@@ -16,6 +16,9 @@ guard, atomic moves, and a full audit trail.
 - Vastra API credentials — see [Login](#login) below. Without them the app starts and
   `/api/health` answers, but nobody can sign in.
 
+> Deploying rather than developing? Skip to [Deployment](#deployment) — it covers the build,
+> the required environment, and what the server does to the database at boot.
+
 ## Run
 
 > ⚠️ **`npm run seed` erases all racks, stock and history.** Run it once when setting up a
@@ -35,6 +38,91 @@ cd client
 npm install
 npm run dev         # http://localhost:5173  (proxies /api → :4000)
 ```
+
+## Deployment
+
+This is an ordinary long-running Node process — **not** serverless, no Lambda handler, no AWS
+SDK, no platform-specific packaging. It runs anywhere Node 18+ runs: EC2, a VPS, Docker,
+Render, Railway, or plain systemd/pm2 on a box.
+
+### One service, not two
+
+The client and the server are separate packages (`client/`, `server/`) with their own
+`package.json` and lockfile, but they **deploy as a single service**. `src/app.js` serves
+`client/dist` as static files when that directory exists, so the client's relative `/api`
+calls land on the same origin — no CORS configuration, no second host, no `VITE_API_URL` to
+set. There are no hardcoded URLs anywhere in `client/src`.
+
+From the repository root:
+
+```bash
+npm run build     # installs both sides, builds the client into client/dist
+npm start         # node server/src/index.js — listens on $PORT (default 4000)
+```
+
+`npm run build` installs the server with `--omit=dev`, so the dev-only MQTT broker (`aedes`)
+is not pulled into production.
+
+> Splitting them is supported but unnecessary: `client/dist` is a plain static bundle that any
+> CDN can host. If you do split it, lock down `cors()` first — see
+> [Before production](#before-production).
+
+### What the deploy needs
+
+| Requirement | Detail |
+|-------------|--------|
+| **Node 18+** | Enforced by `engines` in each `package.json`. The server uses ESM and top-level `await`. |
+| **MySQL 8+** | `CHECK` constraints are used, so MySQL 8+ or MariaDB 10.2+. MariaDB below that will reject the schema. |
+| **The database must already exist** | The app creates *tables*, not the *database*. Run `CREATE DATABASE rms CHARACTER SET utf8mb4;` once — or run `npm run seed` on a throwaway database, which does it for you. |
+| **`server/.env`** | Gitignored, so a fresh clone has none. Copy `server/.env.example`, which documents every variable. |
+| **Outbound TCP to the Vastra host** | `VASTRA_API_BASE_URL` for OTP login, and `MQTT_URL` for QR login. See [Network egress](#network-egress). |
+
+Minimum environment for a staging deploy:
+
+```bash
+DB_HOST=…  DB_PORT=3306  DB_USER=…  DB_PASSWORD=…  DB_NAME=rms
+DB_SSL=true                 # required by most managed MySQL; omit for a local/VPC database
+PORT=4000
+VASTRA_API_BASE_URL=…       # no fallback is baked in — unset means nobody can log in
+VASTRA_API_KEY=…
+MQTT_URL=…                  # optional; unset simply disables QR login
+```
+
+### Migrations run themselves
+
+There is no migrate step to wire into the deploy pipeline. Every schema file is
+`CREATE TABLE IF NOT EXISTS` and is applied at boot, and the one-time reshaping migrations are
+guarded by a ledger table so each runs at most once, ever. **Starting the server is the
+migration.** See [Migrations](#migrations) for the full picture.
+
+Boot is deliberately non-fatal: if the database or broker is unreachable the process still
+starts and says exactly what is wrong in the log, rather than crash-looping.
+
+### Verifying a deploy
+
+```bash
+curl -s https://<host>/api/health
+# {"ok":true,"db":"up"}                                   → API up, schema applied, DB reachable
+# {"ok":false,"db":"down","code":"ENOTFOUND","host":"…"}  → see Troubleshooting
+```
+
+The endpoint is public by design, and reports the DB hostname only — never the user, port or
+password. Loading the root URL should then serve the React app.
+
+### Network egress
+
+QR login needs an outbound connection from the **server** to Vastra's MQTT broker (the browser
+never connects to it — an HTTPS page cannot open a `ws://` socket, which is why this lives in
+Node). If that port is firewalled, the app still starts and OTP login works normally; only QR
+login is unavailable, and the reason is printed at boot. `.env.example` documents the three
+broker URLs that are known to work and why the scheme matters.
+
+### ⚠️ Do not run `npm run seed` on staging
+
+It **drops and rebuilds** the four `core.sql` tables — all racks, stock and audit history.
+Logins, picklist history and layouts survive, but the warehouse does not. It exists to load
+demo data into a development database. A staging deploy does not need it: the app builds its
+own schema at boot.
 
 ## Login
 
@@ -189,7 +277,7 @@ acted on is exactly where a stock discrepancy hides.
   into `item_location`: those rows get deducted, merged and deleted, and a history entry has
   to stay readable afterwards.
 - The tables live in `migrations/picklist.sql`, applied at boot like `auth.sql` rather than
-  from `schema.sql` — this is operational history, and `npm run seed` must not drop it.
+  sitting in `core.sql` — this is operational history, and `npm run seed` must not drop it.
 
 **History tab** reads both flows from wherever each one actually records itself: putaway from
 `audit_log` (`add` rows), picklists from the `picklist` table. `audit_log` alone could not
@@ -266,24 +354,55 @@ removes stock, it never becomes the provenance of stored stock. The `source_tran
 does carry it, spreading one challan over `DC-2026-0001#1`, `#2`… because `id` is that table's
 primary key; the route groups on the part before the `#`.
 
-### Auth tables and migrations
-`migrations/schema.sql` **drops and recreates** its four tables and `npm run seed` applies
-it — so the auth tables deliberately live in `migrations/auth.sql` instead, all
-`CREATE TABLE IF NOT EXISTS`, applied at boot from `src/index.js`. A demo reseed therefore
-never deletes a login.
+### Migrations
+There is no `schema.sql`. The schema lives in four files under `server/migrations/`, all
+`CREATE TABLE IF NOT EXISTS`, applied on **every boot** from `src/index.js` in this order:
 
-### Scope: one warehouse per deployment
-`rack_master.rack_id` is a global primary key and `item_location` / `audit_log` /
-`source_transaction` have **no organization column**. Confirmed intentional: every Vastra org
-that logs in is staff of the *same* warehouse, so login is purely "who are you" for the audit
-trail and the Vastra API token. **Multi-tenancy is not implemented** — if two unrelated orgs
-ever need to share one deployment, every business table needs an `org_id`, `rack_master`'s PK
-becomes `(org_id, rack_id)`, and every query in `rackService.js`, `dashboardService.js` and
-the route files needs a tenancy filter. That is a separate migration.
+| File | Holds |
+|------|-------|
+| `auth.sql` | `organization`, `session`. First, because every other table has a foreign key to `organization` |
+| `picklist.sql` | `picklist`, `picklist_line` — operational history |
+| `layout.sql` | `rack_layout`, `rack_group`, `rack_group_override` — an organization's rack configuration |
+| `core.sql` | `rack_master`, `item_location`, `audit_log`, `source_transaction` |
+
+Because they are all `IF NOT EXISTS`, re-applying them on every boot is free and idempotent:
+**starting the server is the migration.** A deploy brings its own database up to date with no
+separate migrate step.
+
+`npm run seed` drops the four `core.sql` tables *itself* — the `DROP` list lives in `seed.js`,
+never in the `.sql` — and then re-applies that same file, so the table definitions exist in
+exactly one place and cannot drift between "what seed builds" and "what a deploy builds".
+Logins, picklist history and layouts live in the other three files and are therefore **never**
+dropped by a reseed.
+
+Reshaping a table that *already exists* is something `IF NOT EXISTS` cannot do, so those
+migrations live in `src/schemaMigrations.js`, guarded by a `schema_migration` ledger table.
+Each runs at most once ever, and each refuses loudly rather than destroy rows it cannot carry
+across. See [the `fk_org_id` troubleshooting entry](#troubleshooting) for the one deliberate
+override.
+
+### Scope: multi-tenant, one organization per warehouse
+Every business table is organization-scoped. `rack_master`, `item_location`, `audit_log`,
+`source_transaction`, `picklist`, `rack_layout` and `rack_group` all carry `fk_org_id` with a
+foreign key to `organization(id) ON DELETE CASCADE`, and every query filters on it —
+`checkTenancy.js` is what verifies that no route leaks across organizations.
+
+Rack identity is a surrogate `rack_master.id`, unique per organization on
+`(fk_org_id, rack_no, shelf_no, bin_no)`. The human-readable code (`R001-S01-B01`) is
+**derived at read time** by `src/lib/rackCode.js` and stored nowhere — so an organization
+growing past a digit boundary re-pads its own labels without renaming anything, and two
+organizations can each have an `R001-S01-B01` without colliding.
+
+One deployment therefore serves many Vastra organizations, each seeing only its own racks and
+stock. What is *not* implemented is **roles** — see [Deferred](#deferred).
 
 ### Before production
+See [Deployment](#deployment) for the build and environment. The two open items:
+
 - `cors()` in `src/app.js` is wide open. The session token travels in an `Authorization`
-  header rather than a cookie, so this is not a CSRF hole, but lock it to a known origin.
+  header rather than a cookie, so this is not a CSRF hole, and it is moot while the server
+  serves the client from its own origin — but lock it to a known origin, and definitely do so
+  before hosting the client separately.
 - `audit_log.user_id` is `VARCHAR(60)` and stores `vastra_org_id` (`VARCHAR(64)`). Fine for
   the short ids Vastra issues today; widen the column if that ever changes.
 
@@ -308,24 +427,44 @@ npm run seed -- --empty   # schema + 100 empty racks + source txns only, no stoc
 ```
 
 ## Data model
-- `rack_master(rack_id PK, capacity, used, status)` — `used` = SUM(item qty), `status` derived
-  Vacant/Occupied. DB CHECK enforces `used <= capacity`.
-- `item_location(id, item, color, size, qty, fk_rack_id, module_id, module_type)` — many rows per
-  rack (shared pool). `module_id` is the source document code the stock arrived on (`SGR-1`,
-  `JOB-92`) and `module_type` which module produced it; both are `NULL` for stock added by
-  hand, which every screen renders as **Manual**. This pair is the provenance the warehouse
-  searches by — see [Finding stock](#finding-stock-by-source-module).
-- `audit_log(entity_type, entity_id, action, before_json, after_json, user_id, created_at)` —
-  `user_id` is the logged-in org's `vastra_org_id`.
-- `source_transaction(...)` — stub feeding Flow A (inbound) and Flow C (delivery challans) until
-  real Vastra integration. Its `module_type` ENUM has the challan; `item_location`'s does not.
-- `picklist(id, dc_no, party, source, total_qty, short_qty, rack_updated, picked_qty, picked_at, user_id)`
+
+Every business table carries `fk_org_id → organization(id) ON DELETE CASCADE` and every query
+filters on it. See [Scope](#scope-multi-tenant-one-organization-per-warehouse).
+
+- `rack_master(id PK, fk_org_id, rack_no, shelf_no, bin_no, capacity, used, status)` — one row
+  per **bin**, unique on `(fk_org_id, rack_no, shelf_no, bin_no)`. `id` is the identity and
+  never changes; the display code `R001-S01-B01` is derived from the three integers at read
+  time by `src/lib/rackCode.js` and is stored nowhere. `used` = SUM(item qty), `status` derived
+  Vacant/Occupied, and a DB CHECK enforces `used <= capacity`.
+- `item_location(id, fk_org_id, item, color, size, qty, fk_rack_id, module_id, module_type)` —
+  many rows per bin (shared pool). `fk_rack_id` is the numeric `rack_master.id`, not the display
+  code. `module_id` is the source document the stock arrived on (`SGR-1`, `JOB-92`) and
+  `module_type` which module produced it; both are `NULL` for stock added by hand, which every
+  screen renders as **Manual**. That pair is the provenance the warehouse searches by — see
+  [Finding stock](#finding-stock-by-source-module).
+- `audit_log(id, fk_org_id, entity_type, entity_id, action, before_json, after_json, user_id, created_at)` —
+  append-only. `fk_org_id` is the tenancy filter; `user_id` is the *actor* and holds the
+  logged-in organization's `vastra_org_id`. They carry the same value today only because Vastra
+  gives us no per-person identity yet, which is why they are separate columns.
+- `source_transaction(id, fk_org_id, module_type, …)`, PK `(fk_org_id, id)` — dev stub feeding
+  Flow A (inbound) and Flow C (delivery challans). Its `module_type` ENUM includes the challan;
+  `item_location`'s deliberately does not. `USE_VASTRA_MODULES=true` bypasses this table
+  entirely and Vastra scopes the data by access token instead.
+- `picklist(id, fk_org_id, dc_no, party, source, total_qty, short_qty, rack_updated, picked_qty, picked_at, user_id)`
   and `picklist_line(...)` — written on **generate**, closed on Update Rack. In
   `migrations/picklist.sql`, applied at boot, so a demo reseed never deletes real history.
+- `rack_layout(fk_org_id PK, version, …)`, `rack_group(id, fk_org_id, seq, rack_from, rack_to, shelves, bins, bin_capacity)`
+  and `rack_group_override(...)` — an organization's rack configuration as an ordered list of
+  groups. `rack_master` remains the source of truth for stock; these exist to prefill the setup
+  form and compute the next change's diff. `rack_layout`'s four grid columns are legacy,
+  nullable and no longer written — `rack_group` replaced them.
 - `organization(id, vastra_org_id UNIQUE, name, mobile, vastra_access_token, blocked)` —
   mirrored from Vastra on OTP login. `vastra_org_id` is the identity key; matching on mobile
-  or name would be wrong, both change.
-- `session(token PK, org_id → organization)` — one active row per org.
+  or name would be wrong, both change on Vastra's side.
+- `session(token PK, org_id → organization)` — one active row per organization, which is what
+  makes single-active-session and `blocked` genuinely revocable (a JWT could not be).
+- `schema_migration(id PK, applied_at, note)` — the ledger that makes the one-time migrations
+  in `src/schemaMigrations.js` run at most once. See [Migrations](#migrations).
 
 ## Finding stock by source module
 
@@ -568,9 +707,14 @@ curl -s https://<your-app>.onrender.com/api/health
 
 > ⚠️ **Two of those fixes involve `npm run seed`, which erases all racks, stock and history.**
 > That is fine on a fresh or development database and catastrophic on a live one. If the
-> database already holds real organizations, do **not** seed it. Create the missing tables by
-> hand from `migrations/schema.sql` instead: run only its `CREATE TABLE` statements and skip
-> the `DROP TABLE` block at the top. Same result, nothing destroyed.
+> database already holds real organizations, do **not** seed it — you almost certainly do not
+> need to. Every migration is `CREATE TABLE IF NOT EXISTS` and runs at boot, so **restarting
+> the server creates any missing table on its own, non-destructively.** Seeding is only for
+> loading demo data into a throwaway database.
+>
+> The one thing a restart cannot do is create the *database* itself. If the error is
+> `ER_BAD_DB_ERROR`, run `CREATE DATABASE rms CHARACTER SET utf8mb4;` by hand and restart —
+> that is the whole fix, with nothing dropped.
 >
 > You are most likely reading this row while something is already broken, which is exactly
 > when the wrong command gets run. Check which database `DB_NAME` / `DB_HOST` point at before
@@ -627,6 +771,8 @@ lives in the `source_transaction` stub, and the live read needs a production `VA
 and a logged-in org's token. Flip it to `true` once you're pointing at real data — the
 frontend needs no changes.
 
-**Roles.** Login answers "which Vastra org", not "what may they do" — every authenticated org
-has full access. Also see [Scope](#scope-one-warehouse-per-deployment) on multi-tenancy and
+**Roles.** Login answers "which Vastra organization", not "what may they do" — every
+authenticated organization has full access *to its own data*. Tenancy is enforced (see
+[Scope](#scope-multi-tenant-one-organization-per-warehouse)); per-person permissions within an
+organization are not, because Vastra gives us no per-person identity yet. Also see
 [Before production](#before-production) on CORS.
