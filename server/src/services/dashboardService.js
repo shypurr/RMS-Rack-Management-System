@@ -27,20 +27,28 @@ export async function getDashboard(orgId) {
     FROM rack_master WHERE fk_org_id = ?
   `, [orgId]);
 
+  // `action` alone does not mean "stock arrived": creating racks in Rack Setup
+  // writes one action='add' row per batch against entity_type='rack'. Without
+  // the entity filter a warehouse laid out in two batches reported two items
+  // added before a single delivery existed, and the tile disagreed with Item
+  // Management for the rest of the day. Same predicate the History page uses.
   const [[today]] = await pool.query(`
     SELECT
       COALESCE(SUM(action='add'  AND DATE(created_at)=CURDATE()),0) AS added_today,
       COALESCE(SUM(action='move' AND DATE(created_at)=CURDATE()),0) AS moved_today
-    FROM audit_log WHERE fk_org_id = ?
+    FROM audit_log WHERE fk_org_id = ? AND entity_type = 'item_location'
   `, [orgId]);
 
   // Last 7 days of activity (added vs moved), sparse — client fills gaps.
+  // Scoped to stock for the same reason as the counters above: a chart that
+  // spikes on the day the racks were built is describing furniture, not trade.
   const [trend] = await pool.query(`
     SELECT DATE(created_at) AS day,
            COALESCE(SUM(action='add'),0)  AS added,
            COALESCE(SUM(action='move'),0) AS moved
     FROM audit_log
-    WHERE fk_org_id = ? AND created_at >= CURDATE() - INTERVAL 6 DAY
+    WHERE fk_org_id = ? AND entity_type = 'item_location'
+      AND created_at >= CURDATE() - INTERVAL 6 DAY
     GROUP BY DATE(created_at) ORDER BY day
   `, [orgId]);
 

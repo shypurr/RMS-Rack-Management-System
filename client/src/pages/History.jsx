@@ -158,7 +158,7 @@ export default function History() {
           </div>
 
           {/* Filters */}
-          <div className="flex gap-3 flex-wrap mb-3">
+          <div className="flex filter-bar gap-3 flex-wrap mb-3">
             <div className="input-group" style={{ flex: 1, minWidth: 220 }}>
               <span className="input-icon"><i className="fa-solid fa-search" /></span>
               <input className="form-control" value={query} onChange={(e) => setQuery(e.target.value)}
@@ -174,12 +174,21 @@ export default function History() {
 
             {range === 'custom' && (
               <>
-                <input type="date" className="form-control" style={{ width: 'auto' }}
-                  value={customFrom} max={customTo || undefined}
-                  onChange={(e) => setCustomFrom(e.target.value)} title="From" />
-                <input type="date" className="form-control" style={{ width: 'auto' }}
-                  value={customTo} min={customFrom || undefined}
-                  onChange={(e) => setCustomTo(e.target.value)} title="To" />
+                {/* Two identical dd-mm-yyyy boxes side by side say nothing about
+                    which end of the range each one is; the title= tooltips were
+                    the only clue and they needed a hover to find. */}
+                <div className="field-labelled">
+                  <label className="form-label" htmlFor="history-from">Start date</label>
+                  <input id="history-from" type="date" className="form-control" style={{ width: 'auto' }}
+                    value={customFrom} max={customTo || undefined}
+                    onChange={(e) => setCustomFrom(e.target.value)} />
+                </div>
+                <div className="field-labelled">
+                  <label className="form-label" htmlFor="history-to">End date</label>
+                  <input id="history-to" type="date" className="form-control" style={{ width: 'auto' }}
+                    value={customTo} min={customFrom || undefined}
+                    onChange={(e) => setCustomTo(e.target.value)} />
+                </div>
               </>
             )}
 
@@ -193,7 +202,7 @@ export default function History() {
             )}
 
             {filtered && (
-              <button className="btn btn-ghost btn-sm" onClick={clearFilters}>
+              <button className="btn btn-danger-ghost btn-clear" onClick={clearFilters}>
                 <i className="fa-solid fa-xmark" />&nbsp; Clear
               </button>
             )}

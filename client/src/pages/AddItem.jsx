@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import { MODULE_TYPES, sortByEmptiness } from '../lib/rack.js';
@@ -330,7 +331,7 @@ export default function AddItem() {
                       <th style={{ minWidth: 150 }}>Item name</th>
                       <th style={{ width: 110 }}>Color</th>
                       <th style={{ width: 90 }}>Size</th>
-                      <th style={{ width: 80 }}>Quantity</th>
+                      <th style={{ width: 104 }}>Quantity</th>
                       <th style={{ minWidth: 300 }}>Add to rack</th>
                       <th style={{ width: 36 }} />
                     </tr>
@@ -428,7 +429,7 @@ function Row({
           onChange={(e) => onPatch({ size: e.target.value })} />
       </td>
       <td>
-        <input className="form-control" type="number" min="0" placeholder="0" value={row.qty}
+        <input className="form-control qty-input" type="number" min="0" placeholder="0" value={row.qty}
           onChange={(e) => onSetQty(e.target.value.replace(/[^0-9]/g, ''))} />
         {row.docQty != null && num(row.qty) !== num(row.docQty) && (
           <div className="text-xs qty-corrected">inward said {row.docQty}</div>
@@ -572,6 +573,50 @@ function DocCombobox({ moduleType, onSelect, onClear }) {
   );
 }
 
+// A dropdown panel that escapes whatever box its input sits in.
+//
+// The rack picker lives inside the putaway table, and that table scrolls
+// sideways — a scroller clips anything that leaves it, so the list opened and
+// was sliced off by the edge of the card. Rendering the panel into <body> and
+// pinning it to the input's position on screen puts it outside every one of
+// those boxes. It re-measures while the page or the table scrolls, and opens
+// upward when the input is close to the bottom of the window.
+function AnchoredDropdown({ anchorRef, minWidth = 280, children }) {
+  const [box, setBox] = useState(null);
+
+  useEffect(() => {
+    const place = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom;
+      const flip = below < 200 && r.top > below;
+      const room = (flip ? r.top : below) - 12;
+      setBox({
+        left: r.left,
+        width: Math.max(r.width, minWidth),
+        top: flip ? 'auto' : r.bottom + 4,
+        bottom: flip ? window.innerHeight - r.top + 4 : 'auto',
+        maxHeight: Math.max(140, Math.min(260, room)),
+      });
+    };
+    place();
+    // Capture phase: the table's own scroller does not bubble a scroll event.
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [anchorRef, minWidth]);
+
+  if (!box) return null;
+  return createPortal(
+    <div className="txn-dropdown txn-dropdown-fixed" style={box}>{children}</div>,
+    document.body,
+  );
+}
+
 // Rack picker. Shows what is left in each rack RIGHT NOW — the database figure
 // less everything the rest of this table has already promised it — and what is
 // sitting in it, so choosing where a box goes does not need a second screen.
@@ -585,6 +630,7 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
   const [typed, setTyped] = useState(null);
   const [open, setOpen] = useState(false);
   const blurTimer = useRef(null);
+  const inputRef = useRef(null);
 
   const chosen = value ? candidates.find((r) => r.id === value) : null;
   const text = typed ?? (chosen ? chosen.rack_id : '');
@@ -621,6 +667,7 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
   return (
     <div style={{ position: 'relative' }}>
       <input
+        ref={inputRef}
         className="form-control"
         placeholder="Search rack…"
         value={text}
@@ -629,7 +676,7 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
         onBlur={() => { blurTimer.current = setTimeout(close, 150); }}
       />
       {open && (
-        <div className="txn-dropdown">
+        <AnchoredDropdown anchorRef={inputRef}>
           {matches.length ? matches.map((r) => {
             // The gap between what the database says and what is left once this
             // table is saved. Naming it is the whole point — otherwise a rack a
@@ -657,7 +704,7 @@ function RackCombobox({ candidates, value, ownQty, freeIn, stockByRack, onChange
               </div>
             );
           }) : <div className="txn-option text-muted">No racks match</div>}
-        </div>
+        </AnchoredDropdown>
       )}
     </div>
   );

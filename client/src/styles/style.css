@@ -323,6 +323,10 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .btn-outline:hover { background: var(--primary-alpha); }
 .btn-ghost     { background: transparent;       color: var(--text-secondary); border-color: var(--border); }
 .btn-ghost:hover   { background: var(--bg); color: var(--text-primary); }
+/* Clearing a filter is reversible, so it reads red without shouting like a
+   solid .btn-danger sitting in the middle of a filter bar would. */
+.btn-danger-ghost  { background: transparent;   color: var(--danger);    border-color: var(--danger); }
+.btn-danger-ghost:hover { background: var(--danger); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
 .btn-lg { padding: 12px 24px; font-size: 15px; }
 .btn-icon { width: 32px; height: 32px; padding: 0; justify-content: center; }
@@ -381,11 +385,17 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 /* Size run: a challan lists one design across a row of sizes (36 38 42 44 46 L),
    so the entry form mirrors that — a labelled cell per size, wrapping on narrow
    screens rather than scrolling. */
+/* auto-fit, not a fixed track: a single "no size" cell then stretches to the
+   full width of the column and sits level with the Item and Color boxes, while
+   a seven-size run still packs three to a row and wraps. Same rule both ways —
+   the cell width is whatever is left over, never a hardcoded 78px stub next to
+   two full-width fields. */
 .size-run {
-  display: flex; flex-wrap: wrap; gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
 }
 .size-cell {
-  flex: 0 0 78px;
   padding: 8px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -393,7 +403,9 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
   text-align: center;
 }
 .size-cell-label { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
-.size-cell input { padding: 4px 6px; font-size: 13px; text-align: center; }
+/* Same vertical padding and font-size as .form-control, so the quantity box is
+   exactly as tall as the Item and Color fields beside it. */
+.size-cell input { padding: 9px 8px; font-size: 13.5px; text-align: center; }
 .size-cell-stock { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 
 /* Picking more than the racks hold is impossible, so the box is capped rather
@@ -457,6 +469,47 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-alpha); }
 .form-control::placeholder { color: var(--text-muted); }
+
+/* A toast in the bottom-right corner is the wrong place to say "this form is
+   not fillable yet": it is far from the control at fault, it stacks when the
+   button is pressed twice, and it times out whether or not anyone read it.
+   This sits under the button that was pressed and stays until the draft
+   changes. */
+.form-error {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, .10);
+  color: var(--danger);
+  font-size: 13px; font-weight: 600;
+}
+
+/* Every quantity in this portal is typed, not nudged one unit at a time, and
+   the browser's spinners eat the right-hand third of a narrow box. Off
+   everywhere rather than per-screen — .putaway-table already did this alone. */
+input[type="number"].form-control { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"].form-control::-webkit-outer-spin-button,
+input[type="number"].form-control::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── Problem 4: the native select arrow sits hard against the border. Draw our
+   own chevron and inset it by the same 12px as the field's text padding.
+   --text-muted is #94a3b8 in both themes, so one encoded colour is enough.
+   Multi-line selects keep the native control: they have no chevron to place. */
+select.form-control {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='7' viewBox='0 0 11 7' fill='none'%3E%3Cpath d='M1 1L5.5 5.5L10 1' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 11px 7px;
+}
+select.form-control[multiple],
+select.form-control[size]:not([size="1"]) {
+  appearance: auto; -webkit-appearance: auto; -moz-appearance: auto;
+  padding-right: 12px; background-image: none;
+}
 .input-group { position: relative; display: flex; }
 .input-group .form-control { padding-left: 36px; }
 .input-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); z-index: 1; pointer-events: none; }
@@ -472,6 +525,32 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .progress-bar.green  { background: var(--success); }
 .progress-bar.yellow { background: var(--warning); }
 .progress-bar.red    { background: var(--danger); }
+
+/* Refresh re-fetches the whole dashboard in one call, which on a warm database
+   is over before anything on screen visibly changes — so the button looked
+   decorative. This is the proof it fired: pinned to the very top of the
+   viewport, above the topbar, below modals and toasts. Indeterminate, because
+   a single aggregate query reports no progress to report. */
+.top-progress {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 3px; z-index: 2000;
+  background: var(--primary-alpha);
+  overflow: hidden;
+}
+.top-progress::after {
+  content: '';
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 40%;
+  background: var(--primary);
+  animation: top-progress-slide 1s ease-in-out infinite;
+}
+@keyframes top-progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .top-progress::after { animation-duration: 2.4s; animation-timing-function: linear; }
+}
 
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 .tab-bar {
@@ -751,6 +830,10 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 }
 .txn-option { padding: 8px 10px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; }
 .txn-option:hover { background: var(--bg); }
+/* The rack list opens from inside the table's horizontal scroller, which clips
+   whatever leaves it. This copy is rendered into <body> and positioned against
+   the input in page coordinates, so nothing can cut it off. */
+.txn-dropdown-fixed { position: fixed; right: auto; }
 
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -766,6 +849,12 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 .putaway-alloc { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .putaway-alloc:last-of-type { margin-bottom: 4px; }
 .alloc-qty { width: 68px; text-align: center; }
+/* Quantities are typed, never nudged one at a time: the spinner arrows ate a
+   third of a box this narrow and were never used. */
+.putaway-table input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.putaway-table input[type="number"]::-webkit-outer-spin-button,
+.putaway-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.putaway-table .qty-input { text-align: center; font-size: 14px; padding: 7px 8px; }
 
 /* A line that landed, and one that did not. Tinted rather than outlined so a
    long table still reads as a table. */
@@ -846,16 +935,43 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
    Hiding one would mean stock that never gets picked. */
 .picklist-entry-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(170px, .8fr) minmax(300px, 2.4fr);
+  grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(280px, 1.6fr);
   gap: 16px;
   align-items: start;
 }
 .picklist-entry-row.no-sizes {
-  grid-template-columns: minmax(200px, 1fr) minmax(170px, .8fr);
+  grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr);
 }
 @media (max-width: 1100px) {
   .picklist-entry-row { grid-template-columns: 1fr 1fr; }
   .picklist-entry-row > :nth-child(3) { grid-column: 1 / -1; }
+}
+
+/* Filter bars mix labelled and unlabelled controls: the two custom-range date
+   boxes carry "Start date"/"End date" so nobody has to guess which calendar is
+   which, while the search box and dropdowns next to them need no caption.
+   Aligning on the bottom edge keeps every input on one line regardless. */
+.filter-bar { align-items: flex-end; }
+.field-labelled { display: flex; flex-direction: column; gap: 4px; }
+.field-labelled > .form-label { margin-bottom: 0; font-size: 11.5px; }
+
+/* Clear matches the HEIGHT of the dropdown beside it and nothing else: the
+   same vertical padding and font-size as .form-control, which is what sets a
+   field's height. Width stays whatever the label needs — no min-width. A
+   button that is short next to its neighbours looks like an afterthought; one
+   stretched to their width looks like a second dropdown. */
+.filter-bar .btn-clear {
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+/* Font Awesome ships `vertical-align: -.125em` on its icons because its glyphs
+   sit high in the em box. .btn is a flex container, and vertical-align does
+   nothing to a flex item — so the icon loses that correction and rides about a
+   pixel above the label. Re-apply it as a relative offset, which flex does
+   honour and which costs no layout. */
+.filter-bar .btn-clear i {
+  position: relative;
+  top: 1px;
 }
 
 /* The footer under every paged list: what you are looking at, and the button

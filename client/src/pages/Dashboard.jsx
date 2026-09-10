@@ -21,9 +21,27 @@ function moduleChart(rows = []) {
 export default function Dashboard() {
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = () => api.dashboard().then(setData).catch((e) => toast(e.message, 'error'));
   useEffect(() => { load(); }, []);
+
+  // The button always worked — one /dashboard call, re-rendered on arrival. The
+  // problem was that on a warm database it finished in under 100ms and, if
+  // nothing had changed since, repainted the identical screen, so there was
+  // nothing to tell you it had run. Hence a visible bar and a toast at the end.
+  //
+  // The 500ms floor is deliberate: a bar that appears and vanishes inside one
+  // frame is the same as no bar. Both halves run together, so a slow fetch is
+  // never delayed by the floor — only a fast one is held up to be seen.
+  const refresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    Promise.all([api.dashboard(), new Promise((r) => setTimeout(r, 500))])
+      .then(([d]) => { setData(d); toast('Dashboard refreshed', 'success'); })
+      .catch((e) => toast(e.message, 'error'))
+      .finally(() => setRefreshing(false));
+  };
 
   if (!data) {
     return (
@@ -40,6 +58,7 @@ export default function Dashboard() {
 
   return (
     <>
+      {refreshing && <div className="top-progress" role="progressbar" aria-label="Refreshing dashboard" />}
       <div className="breadcrumb-bar"><span>Dashboard</span></div>
       <div className="page-header">
         <div>
@@ -47,7 +66,10 @@ export default function Dashboard() {
           <p className="page-subtitle">Live overview of racks, items, and activity</p>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={load}><i className="fa-solid fa-rotate" /> Refresh</button>
+          <button className="btn btn-ghost" onClick={refresh} disabled={refreshing}>
+            <i className={`fa-solid fa-rotate${refreshing ? ' fa-spin' : ''}`} />
+            {refreshing ? ' Refreshing…' : ' Refresh'}
+          </button>
           <Link to="/add" className="btn btn-primary"><i className="fa-solid fa-plus" /> Add Stock</Link>
         </div>
       </div>

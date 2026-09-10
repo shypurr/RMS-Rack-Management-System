@@ -118,11 +118,17 @@ export default function Picklist() {
 
   // Any edit to the challan invalidates a picklist generated from the old one.
   const clearPicklist = () => { setDetail(null); setAlloc({}); };
+
+  // Draft validation shows on the form, under the button that was pressed —
+  // see .form-error. `draft` is replaced rather than mutated on every edit, so
+  // this clears the moment the user acts on the message.
+  const [draftError, setDraftError] = useState('');
+  useEffect(() => { setDraftError(''); }, [draft]);
   const editLines = (next) => { setLines(next); clearPicklist(); };
 
   const addDraft = () => {
     const item = draft.item.trim();
-    if (!item) return toast('Pick an item first', 'warning');
+    if (!item) return setDraftError('Please pick an item first');
     const color = draft.color.trim();
 
     // Only the size run — every quantity in it is already capped at stock.
@@ -130,7 +136,7 @@ export default function Picklist() {
       .map(([size]) => ({ item, color, size, qty: Number(draft.sizeQty[size]) || 0 }))
       .filter((s) => s.qty > 0);
 
-    if (!added.length) return toast('Enter a quantity against at least one size', 'warning');
+    if (!added.length) return setDraftError('Please add quantity');
 
     // Merge into a line already on the challan for the same item+colour+size
     // rather than appending a second one — the challan should read as one row
@@ -447,6 +453,13 @@ export default function Picklist() {
                       <i className="fa-solid fa-plus" /> Add item
                     </button>
                   </div>
+
+                  {draftError && (
+                    <p className="form-error mt-4" role="alert">
+                      <i className="fa-solid fa-circle-exclamation" />
+                      Error: {draftError}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
