@@ -385,35 +385,47 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 /* Size run: a challan lists one design across a row of sizes (36 38 42 44 46 L),
    so the entry form mirrors that — a labelled cell per size, wrapping on narrow
    screens rather than scrolling. */
-/* auto-fit, not a fixed track: a single "no size" cell then stretches to the
-   full width of the column and sits level with the Item and Color boxes, while
-   a seven-size run still packs three to a row and wraps. Same rule both ways —
-   the cell width is whatever is left over, never a hardcoded 78px stub next to
-   two full-width fields. */
+/* One ROW per size, stacked, rather than a wrapping grid of boxes. A grid is
+   fine for three sizes and falls apart at five: the run wraps to a second line
+   and leaves an orphan box sitting alone under four others. Rows just get
+   longer, so a 2-size design and a 12-size design read the same way, and the
+   size name, its quantity box and its stock figure line up in columns down the
+   list instead of being stacked inside a tile. */
 .size-run {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 .size-cell {
-  padding: 8px;
+  display: grid;
+  grid-template-columns: minmax(52px, 1fr) minmax(84px, 1.1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  text-align: center;
 }
-.size-cell-label { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
-/* Same vertical padding and font-size as .form-control, so the quantity box is
-   exactly as tall as the Item and Color fields beside it. */
-.size-cell input { padding: 9px 8px; font-size: 13.5px; text-align: center; }
-.size-cell-stock { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+.size-cell-label { font-size: 13px; font-weight: 700; }
+/* The caption above each of the two figures — without them the row is three
+   bare numbers and nothing says which is the one you type in. */
+.size-cell-cap { display: block; font-size: 10.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 3px; }
+.size-cell input { padding: 7px 10px; font-size: 13.5px; text-align: center; }
+.size-cell-stock { text-align: center; }
+/* "3 on challan" / "max 5" / "all taken" — a full-width line under the row, so
+   it can appear and disappear without moving the three columns above it. */
+.size-cell-note {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: 8px;
+  font-size: 10.5px; color: var(--text-muted);
+}
 
 /* Picking more than the racks hold is impossible, so the box is capped rather
    than flagged. `.over` now means "the number you typed was cut down to this",
    `.maxed` that the challan already claims every unit of that size. */
 .size-cell.over { border-color: var(--danger); }
 .size-cell.over input { border-color: var(--danger); color: var(--danger); }
-.size-cell-over { font-size: 10px; font-weight: 700; color: var(--danger); }
+.size-cell-over { font-weight: 700; color: var(--danger); }
 .size-cell.maxed { opacity: 0.6; }
 .size-cell input:disabled { cursor: not-allowed; }
 
