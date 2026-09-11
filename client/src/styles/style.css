@@ -763,6 +763,7 @@ select.form-control[size]:not([size="1"]) {
 .text-muted { color: var(--text-muted); }
 .text-primary-color { color: var(--primary); }
 .text-success { color: var(--success); }
+.text-warning { color: var(--warning); }
 .text-danger { color: var(--danger); }
 .font-600 { font-weight: 600; }
 .font-700 { font-weight: 700; }

@@ -116,27 +116,66 @@ export default function Picklist() {
     setCapped(({ [size]: _drop, ...rest }) => (n > ceiling ? { ...rest, [size]: ceiling } : rest));
   };
 
-  // Any edit to the challan invalidates a picklist generated from the old one.
-  const clearPicklist = () => { setDetail(null); setAlloc({}); };
+  // The exact `lines` array the picklist on screen was resolved from. Compared
+  // by reference — `lines` is replaced, never mutated — so this is simply
+  // "has the challan been edited since". Only used to say so; it disables
+  // nothing.
+  const [generatedFrom, setGeneratedFrom] = useState(null);
+
+  // Drops the picklist entirely. Only two things do that now: switching or
+  // clearing the challan, and the pick itself. Editing the lines does not.
+  const clearPicklist = () => { setDetail(null); setAlloc({}); setGeneratedFrom(null); };
 
   // Draft validation shows on the form, under the button that was pressed —
   // see .form-error. `draft` is replaced rather than mutated on every edit, so
   // this clears the moment the user acts on the message.
   const [draftError, setDraftError] = useState('');
   useEffect(() => { setDraftError(''); }, [draft]);
-  const editLines = (next) => { setLines(next); clearPicklist(); };
 
-  const addDraft = () => {
+  // Whether a blank entry row is on screen. It used to be unconditional, which
+  // is what made "Add item" look decorative: after a commit the next blank row
+  // was already sitting there, so the next design could be typed straight into
+  // it and the button never had to be pressed. A row now exists only because it
+  // was asked for — the first one on an empty challan, and every later one from
+  // pressing Add item — and generating closes it again.
+  const [entryOpen, setEntryOpen] = useState(true);
+  const openEntry = () => { setDraft(EMPTY_DRAFT); setCapped({}); setDraftError(''); setEntryOpen(true); };
+  // Editing the challan used to call clearPicklist(), so adding a second design
+  // made the picklist you were looking at vanish and Generate felt like a point
+  // of no return. It now survives every edit: the only things that end a
+  // picklist are regenerating it (same entry, updated in place) and taking the
+  // stock out of the racks.
+  const editLines = (next) => { setLines(next); };
+
+  // Fold the draft into the challan's lines and hand back the result. Returns
+  // null when the draft is not fillable, having already put the reason on the
+  // form. Split out of addDraft because Generate needs the same fold — and
+  // needs the RESULT rather than the state write, since setLines has not
+  // landed by the time the request goes out.
+  const foldDraft = () => {
     const item = draft.item.trim();
-    if (!item) return setDraftError('Please pick an item first');
+    if (!item) { setDraftError('Please pick an item first'); return null; }
     const color = draft.color.trim();
+
+    // A design whose colours are all real ones cannot be picked without
+    // choosing between them, and until one is chosen there is no size run to
+    // put a quantity in — so saying "add quantity" here points at a box that
+    // is not on screen yet.
+    //
+    // Guarded on `includes('')` because a design that also has an uncoloured
+    // variant offers '' as a legitimate choice, and the select renders that
+    // and its "Select a color…" placeholder with the same empty value. The two
+    // are indistinguishable, so '' cannot be called an error there.
+    if (draftColors.length > 0 && !draftColors.includes('') && !color) {
+      setDraftError('Please add color'); return null;
+    }
 
     // Only the size run — every quantity in it is already capped at stock.
     const added = draftSizes
       .map(([size]) => ({ item, color, size, qty: Number(draft.sizeQty[size]) || 0 }))
       .filter((s) => s.qty > 0);
 
-    if (!added.length) return setDraftError('Please add quantity');
+    if (!added.length) { setDraftError('Please add quantity'); return null; }
 
     // Merge into a line already on the challan for the same item+colour+size
     // rather than appending a second one — the challan should read as one row
@@ -147,30 +186,67 @@ export default function Picklist() {
       if (at >= 0) next[at] = { ...next[at], qty: next[at].qty + a.qty };
       else next.push(a);
     }
+    return next;
+  };
+
+  const commitDraft = (next) => {
     editLines(next);
     setDraft(EMPTY_DRAFT);
     setCapped({});
   };
 
-  const generate = async (dc = dcNo) => {
+  const addDraft = () => {
+    const next = foldDraft();
+    if (next) commitDraft(next);
+  };
+
+  // `useLines` exists because Generate may have just folded the draft in: that
+  // setLines has not landed yet, so reading `lines` here would resolve the
+  // challan MINUS the line the user just typed.
+  const generate = async (dc = dcNo, useLines = lines) => {
     setLoading(true);
     try {
       const res = mode === 'manual'
-        // Pass the current id back so iterating on the same challan updates one
-        // history entry rather than leaving a trail of abandoned ones.
-        ? await api.resolvePicklist({ dcNo: dcNo.trim() || null, lines, picklistId: detail?.id ?? null })
+        // Passing the current id back is what makes a regenerate UPDATE the
+        // picklist on screen — same history entry, its lines replaced — rather
+        // than filing a second one and abandoning the first.
+        ? await api.resolvePicklist({ dcNo: dcNo.trim() || null, lines: useLines, picklistId: detail?.id ?? null })
         : await api.picklist(dc);
       setDetail(res);
+      setGeneratedFrom(useLines);
       // Seed the boxes from the server's largest-rack-first suggestion.
       const next = {};
       for (const r of res.rows) for (const p of r.placements) next[p.id] = p.suggested;
       setAlloc(next);
     } catch (e) {
+      // Deliberately keeps whatever picklist is already on screen: a failed
+      // regenerate has produced nothing to replace it with, and throwing the
+      // last good one away is the behaviour this screen is moving away from.
       toast(e.message, 'error');
-      clearPicklist();
     } finally {
       setLoading(false);
     }
+  };
+
+  // What the Generate button actually runs. Generating is the goal of this
+  // screen; "Add item" is only for putting a SECOND design on the same challan.
+  // So a one-design challan never has to be "added" first — pressing Generate
+  // folds whatever is in the entry form into the lines and resolves in one go,
+  // which is also what keeps the challan table honest: the picklist below is
+  // always exactly the rows shown above it, and pressing Generate twice cannot
+  // count the same draft twice.
+  //
+  // A half-filled draft (item chosen, no quantity) stops here with the same
+  // message the Add item button gives, rather than being silently dropped —
+  // a dropped line is stock that never gets picked.
+  const generateManual = async () => {
+    // Nothing pending — the lines already on the challan stand on their own.
+    if (!draft.item.trim()) { setEntryOpen(false); return generate(); }
+    const next = foldDraft();
+    if (!next) return;
+    commitDraft(next);
+    setEntryOpen(false);
+    await generate(dcNo, next);
   };
 
   // Opens the printable sheet in a new tab. Popup blockers only trust a window
@@ -214,7 +290,7 @@ export default function Picklist() {
       // The pick is done — clear the whole challan so the next one starts from
       // a blank slate. Leaving the list up invites picking it a second time.
       setStock(await api.listItems());   // the catalogue's availability just changed
-      setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
+      setLines([]); setDraft(EMPTY_DRAFT); setCapped({}); setEntryOpen(true);
       setDcNo('');
       clearPicklist();
     } catch (e) {
@@ -248,12 +324,22 @@ export default function Picklist() {
         { qty: 0, available: 0, short: 0 }
       )
     : null;
-  const canGenerate = mode === 'manual' ? lines.length > 0 : !!dcNo.trim();
+  // A design picked in the entry form counts, even before it has been added:
+  // the whole point is that a single-item challan needs no Add item press. The
+  // missing quantity is caught by foldDraft and shown on the form, so it is not
+  // what gates the button.
+  // Reference comparison: `lines` is replaced on every edit, so an identity
+  // mismatch means the challan has moved on from what is displayed below.
+  const challanChanged = !!detail && generatedFrom !== lines;
+
+  const canGenerate = mode === 'manual'
+    ? lines.length > 0 || !!draft.item.trim()
+    : !!dcNo.trim();
 
   const switchMode = (m) => {
     setMode(m);
     setDcNo('');
-    setLines([]); setDraft(EMPTY_DRAFT); setCapped({});
+    setLines([]); setDraft(EMPTY_DRAFT); setCapped({}); setEntryOpen(true);
     clearPicklist();
   };
 
@@ -359,6 +445,7 @@ export default function Picklist() {
                   </div>
                 )}
 
+                {entryOpen ? (
                 <div className="add-item-panel">
                   <div className="text-sm font-700 mb-3">
                     Item {blocks.length + 1}
@@ -461,14 +548,31 @@ export default function Picklist() {
                     </p>
                   )}
                 </div>
+                ) : (
+                  <div className="flex">
+                    <button className="btn btn-primary" onClick={openEntry}>
+                      <i className="fa-solid fa-plus" /> Add item
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          <button className="btn btn-primary" onClick={() => generate()} disabled={loading || !canGenerate}>
-            <i className={`fa-solid ${loading ? 'fa-spinner fa-spin' : 'fa-clipboard-list'}`} />
-            &nbsp; {loading ? 'Generating…' : 'Generate Picklist'}
-          </button>
+          {/* Wrapped rather than bare: .btn is inline-flex, so on its own in a
+              block it sits on a text baseline — the card above contributes a
+              16px mb-4 while below there is only the line box's descender, and
+              the button ends up crowding the Picklist card. A flex wrapper
+              takes it out of inline flow entirely, so the mb-4 here is the
+              whole gap below and matches the one above. */}
+          <div className="flex mb-4">
+            <button className="btn btn-primary"
+              onClick={() => (mode === 'manual' ? generateManual() : generate())}
+              disabled={loading || !canGenerate}>
+              <i className={`fa-solid ${loading ? 'fa-spinner fa-spin' : 'fa-clipboard-list'}`} />
+              &nbsp; {loading ? 'Generating…' : 'Generate Picklist'}
+            </button>
+          </div>
         </div>
 
         {detail && (
@@ -535,10 +639,18 @@ export default function Picklist() {
                   <i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-boxes-packing'}`} />
                   &nbsp; {saving ? 'Taking out…' : 'Take out of racks'}
                 </button>
-                <span className="text-sm text-muted">
+                {/* Nothing here is disabled when the challan has moved on — the
+                    picklist below is still a real, pickable snapshot and the
+                    user may well mean to take it out as it stands. It just says
+                    so, because otherwise adding an item and going straight to
+                    "Take out of racks" drops that item silently: the pick
+                    resets the whole challan afterwards. */}
+                <span className={`text-sm ${challanChanged ? 'text-warning' : 'text-muted'}`}>
                   {overAllocated
                     ? 'One of the quantities is more than that rack actually holds.'
-                    : 'Nothing has left the racks yet. This button removes the quantities above.'}
+                    : challanChanged
+                      ? 'The challan has changed since this was generated — press Generate Picklist again to include the new items.'
+                      : 'Nothing has left the racks yet. This button removes the quantities above.'}
                 </span>
               </div>
             </div>
