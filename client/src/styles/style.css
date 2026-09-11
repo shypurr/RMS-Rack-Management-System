@@ -385,40 +385,52 @@ button { cursor: pointer; border: none; background: none; font-family: var(--fon
 /* Size run: a challan lists one design across a row of sizes (36 38 42 44 46 L),
    so the entry form mirrors that — a labelled cell per size, wrapping on narrow
    screens rather than scrolling. */
-/* One ROW per size, stacked, rather than a wrapping grid of boxes. A grid is
-   fine for three sizes and falls apart at five: the run wraps to a second line
-   and leaves an orphan box sitting alone under four others. Rows just get
-   longer, so a 2-size design and a 12-size design read the same way, and the
-   size name, its quantity box and its stock figure line up in columns down the
-   list instead of being stacked inside a tile. */
-.size-run {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* The size run has two layouts, chosen on how many sizes there are.
+   Up to three (.rows) it is one labelled row per size: name, quantity box and
+   stock line up in columns and each figure gets a caption. Past three (.tiles)
+   that column would run far past the Item and Color fields beside it, so the
+   sizes pack into wrapping tiles and give up the captions for compactness.
+   Everything that is about the BOX — surface, border, cap warnings — is shared
+   below; only the arrangement differs. */
+.size-run { gap: 8px; }
 .size-cell {
-  display: grid;
-  grid-template-columns: minmax(52px, 1fr) minmax(84px, 1.1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
 .size-cell-label { font-size: 13px; font-weight: 700; }
-/* The caption above each of the two figures — without them the row is three
-   bare numbers and nothing says which is the one you type in. */
-.size-cell-cap { display: block; font-size: 10.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 3px; }
-.size-cell input { padding: 7px 10px; font-size: 13.5px; text-align: center; }
-.size-cell-stock { text-align: center; }
-/* "3 on challan" / "max 5" / "all taken" — a full-width line under the row, so
-   it can appear and disappear without moving the three columns above it. */
+.size-cell input { font-size: 13.5px; text-align: center; }
+/* "3 on challan" / "max 5" / "all taken" — its own line under the box, so it
+   can appear and disappear without moving anything above it. */
 .size-cell-note {
   grid-column: 1 / -1;
   display: flex; flex-wrap: wrap; gap: 8px;
   font-size: 10.5px; color: var(--text-muted);
 }
+
+/* ≤3 sizes — a row each */
+.size-run.rows { display: flex; flex-direction: column; }
+.size-run.rows .size-cell {
+  display: grid;
+  grid-template-columns: minmax(52px, 1fr) minmax(84px, 1.1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+}
+/* Without these two captions the row is three bare numbers with nothing saying
+   which one you type in. The tile layout does not need them: there is only one
+   box in a tile, so it cannot be mistaken for the stock figure under it. */
+.size-cell-cap { display: block; font-size: 10.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 3px; }
+.size-run.rows .size-cell input { padding: 7px 10px; }
+.size-run.rows .size-cell-stock { text-align: center; }
+
+/* >3 sizes — wrapping tiles, as many per line as fit */
+.size-run.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.size-run.tiles .size-cell { padding: 8px; text-align: center; }
+.size-run.tiles .size-cell-label { margin-bottom: 4px; }
+.size-run.tiles .size-cell input { padding: 9px 8px; }
+.size-run.tiles .size-cell-stock { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+.size-run.tiles .size-cell-note { justify-content: center; margin-top: 2px; }
 
 /* Picking more than the racks hold is impossible, so the box is capped rather
    than flagged. `.over` now means "the number you typed was cut down to this",

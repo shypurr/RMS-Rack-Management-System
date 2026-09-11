@@ -486,32 +486,52 @@ export default function Picklist() {
                   {draftSizes.length > 0 && (
                     <div className="form-group">
                       <label className="form-label">Quantity per size</label>
-                      <div className="size-run">
+                      {/* Short runs read better as labelled rows — the size, its
+                          quantity box and its stock line up in columns and each
+                          figure gets a caption saying which is which. Past three
+                          sizes that column would run far past the Item and Color
+                          fields beside it, so the run packs into wrapping tiles
+                          instead and trades the captions for compactness. */}
+                      <div className={`size-run ${draftSizes.length > 3 ? 'tiles' : 'rows'}`}>
                         {draftSizes.map(([size, have]) => {
                           const ceiling = ceilingFor(size, have);
                           const onChallan = committed.get(size) || 0;
-                          return (
-                            <div key={size} className={`size-cell ${capped[size] !== undefined ? 'over' : ''} ${ceiling === 0 ? 'maxed' : ''}`}>
+                          const cls = `size-cell ${capped[size] !== undefined ? 'over' : ''} ${ceiling === 0 ? 'maxed' : ''}`;
+                          const qtyInput = (
+                            <input className="form-control" type="number" min="0" max={ceiling}
+                              placeholder="0" disabled={ceiling === 0}
+                              value={draft.sizeQty[size] ?? ''}
+                              onChange={(e) => setSizeQty(size, e.target.value, ceiling)} />
+                          );
+                          // Shared by both layouts so the cap warnings cannot
+                          // drift apart between them.
+                          const note = (onChallan > 0 || ceiling === 0 || capped[size] !== undefined) && (
+                            <div className="size-cell-note">
+                              {onChallan > 0 && <span>{onChallan} on challan</span>}
+                              {ceiling === 0
+                                ? <span className="size-cell-over">all taken</span>
+                                : capped[size] !== undefined && <span className="size-cell-over">max {ceiling}</span>}
+                            </div>
+                          );
+                          return draftSizes.length > 3 ? (
+                            <div key={size} className={cls}>
+                              <div className="size-cell-label">{size || 'no size'}</div>
+                              {qtyInput}
+                              <div className="size-cell-stock">{have} in stock</div>
+                              {note}
+                            </div>
+                          ) : (
+                            <div key={size} className={cls}>
                               <div className="size-cell-label">{size || 'no size'}</div>
                               <div className="size-cell-field">
                                 <span className="size-cell-cap">Qty</span>
-                                <input className="form-control" type="number" min="0" max={ceiling}
-                                  placeholder="0" disabled={ceiling === 0}
-                                  value={draft.sizeQty[size] ?? ''}
-                                  onChange={(e) => setSizeQty(size, e.target.value, ceiling)} />
+                                {qtyInput}
                               </div>
                               <div className="size-cell-field size-cell-stock">
                                 <span className="size-cell-cap">Stock</span>
                                 <span className="badge badge-ghost">{have}</span>
                               </div>
-                              {(onChallan > 0 || ceiling === 0 || capped[size] !== undefined) && (
-                                <div className="size-cell-note">
-                                  {onChallan > 0 && <span>{onChallan} on challan</span>}
-                                  {ceiling === 0
-                                    ? <span className="size-cell-over">all taken</span>
-                                    : capped[size] !== undefined && <span className="size-cell-over">max {ceiling}</span>}
-                                </div>
-                              )}
+                              {note}
                             </div>
                           );
                         })}
